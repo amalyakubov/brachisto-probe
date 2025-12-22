@@ -114,6 +114,18 @@ class App {
             }
             
             try {
+                const probeTab = sidebar ? sidebar.getTabContainer('probe') : document.getElementById('tab-probe');
+                if (probeTab) {
+                    probeTab.innerHTML = '<div id="probe-panel-content"></div>';
+                    this.probePanel = new ProbePanel('probe-panel-content');
+                    // Expose globally
+                    window.probePanel = this.probePanel;
+                }
+            } catch (e) {
+                console.error('Failed to initialize ProbePanel:', e);
+            }
+            
+            try {
                 const manageTab = sidebar ? sidebar.getTabContainer('manage') : document.getElementById('tab-manage');
                 if (manageTab) {
                     manageTab.innerHTML = '<div id="manage-panel-content"></div>';
@@ -405,60 +417,81 @@ class App {
         const profiler = window.performanceProfiler;
         const uiUpdateStart = profiler ? profiler.startTiming('ui_update') : null;
         
+        // Throttle UI updates - only update every N frames to reduce CPU usage
+        // Update critical displays every frame, but throttle expensive panels
+        if (!this.uiUpdateFrameCount) {
+            this.uiUpdateFrameCount = 0;
+        }
+        this.uiUpdateFrameCount++;
+        
+        // Critical updates every frame (resource display, time controls)
+        const criticalUpdate = true;
+        
+        // Throttled updates every 5 frames (~12 updates/sec instead of 60)
+        const throttledUpdate = (this.uiUpdateFrameCount % 5 === 0);
+        
         // Update all UI components
+        // Critical updates (every frame)
         if (this.resourceDisplay) {
             this.resourceDisplay.update(gameState);
         }
-        if (this.purchasePanel) {
-            this.purchasePanel.update(gameState);
-        }
-        if (this.researchPanel) {
-            this.researchPanel.update(gameState);
-            // Expose globally for event handlers
-            window.researchPanel = this.researchPanel;
-        }
-        if (this.commandPanel) {
-            this.commandPanel.update(gameState);
-        }
-        if (this.productionPanel) {
-            this.productionPanel.update(gameState);
-        }
-        if (this.probeAllocationPanel) {
-            this.probeAllocationPanel.update(gameState);
-        }
-        if (this.managePanel) {
-            this.managePanel.update(gameState);
-        }
-        // Probe visualization removed - focusing on mechanics first
-        // if (this.probeViz) {
-        //     this.probeViz.updateProbes(gameState);
-        // }
-        if (this.dysonViz) {
-            this.dysonViz.update(gameState);
-            // Dyson progress bar removed - displayed in resource display instead
-        }
-        if (this.solarSystem) {
-            this.solarSystem.updateZoneDepletion(gameState);
-        }
-        if (this.structuresViz) {
-            // Get probe allocations and factory production from game state
-            const probeAllocations = gameState.probe_allocations || {};
-            const factoryProduction = gameState.factory_production || {};
-            this.structuresViz.updateStructures(gameState, probeAllocations, factoryProduction);
-        }
-        // Metrics panel merged into probe summary panel - no longer needed
-        if (this.probeSummaryPanel) {
-            this.probeSummaryPanel.update(gameState);
-            
-            if (this.transferPanel) {
-                this.transferPanel.update(gameState);
-            }
-        }
-        if (this.orbitalZoneSelector) {
-            this.orbitalZoneSelector.update(gameState);
-        }
         if (this.timeControls) {
             this.timeControls.update(gameState);
+        }
+        
+        // Throttled updates (every 5 frames = ~12 updates/sec)
+        if (throttledUpdate) {
+            if (this.purchasePanel) {
+                this.purchasePanel.update(gameState);
+            }
+            if (this.researchPanel) {
+                this.researchPanel.update(gameState);
+                // Expose globally for event handlers
+                window.researchPanel = this.researchPanel;
+            }
+            if (this.commandPanel) {
+                this.commandPanel.update(gameState);
+            }
+            if (this.productionPanel) {
+                this.productionPanel.update(gameState);
+            }
+            if (this.probeAllocationPanel) {
+                this.probeAllocationPanel.update(gameState);
+            }
+            if (this.probePanel) {
+                this.probePanel.update(gameState);
+            }
+            if (this.managePanel) {
+                this.managePanel.update(gameState);
+            }
+            // Probe visualization removed - focusing on mechanics first
+            // if (this.probeViz) {
+            //     this.probeViz.updateProbes(gameState);
+            // }
+            if (this.dysonViz) {
+                this.dysonViz.update(gameState);
+                // Dyson progress bar removed - displayed in resource display instead
+            }
+            if (this.solarSystem) {
+                this.solarSystem.updateZoneDepletion(gameState);
+            }
+            if (this.structuresViz) {
+                // Get probe allocations and factory production from game state
+                const probeAllocations = gameState.probe_allocations || {};
+                const factoryProduction = gameState.factory_production || {};
+                this.structuresViz.updateStructures(gameState, probeAllocations, factoryProduction);
+            }
+            // Metrics panel merged into probe summary panel - no longer needed
+            if (this.probeSummaryPanel) {
+                this.probeSummaryPanel.update(gameState);
+                
+                if (this.transferPanel) {
+                    this.transferPanel.update(gameState);
+                }
+            }
+            if (this.orbitalZoneSelector) {
+                this.orbitalZoneSelector.update(gameState);
+            }
         }
         
         // Energy display removed
@@ -512,10 +545,9 @@ class App {
         return value.toFixed(2);
     }
 
-    formatTime(seconds) {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    formatTime(days) {
+        // Game time is now in days, use FormatUtils for consistent formatting
+        return FormatUtils.formatTime(days);
     }
 
     animate() {

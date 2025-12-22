@@ -3,6 +3,11 @@ class ProbeSummaryPanel {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.gameState = null;
+        
+        // Performance optimization: Cache calculations
+        this.cachedCalculations = null;
+        this.lastCalculationKey = null;
+        
         if (!this.container) {
             console.error('ProbeSummaryPanel: Container not found:', containerId);
         } else {
@@ -201,100 +206,135 @@ class ProbeSummaryPanel {
         }
 
         // Dexterity Breakdown (merged from metrics panel)
+        // Cache expensive calculations - only recalculate when inputs change
         const allocations = gameState.probe_allocations || {};
         const allocationsByZone = gameState.probe_allocations_by_zone || {};
         const breakdown = gameState.resource_breakdowns?.dexterity;
+        const buildAllocation = gameState.build_allocation || 50;
         
-        // Get research multiplier
-        const roboticBonus = breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0;
-        const totalMultiplier = 1.0 + (roboticBonus || 0);
+        // Create cache key from relevant inputs
+        const calculationKey = JSON.stringify({
+            allocations: allocations,
+            allocationsByZone: allocationsByZone,
+            buildAllocation: buildAllocation,
+            roboticBonus: breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0
+        });
         
-        // Calculate actual rates in kg/day, then convert to kg/s for formatRate()
-        // Base rates from config
-        const PROBE_HARVEST_RATE = Config.PROBE_HARVEST_RATE; // 100 kg/day per probe
-        const PROBE_BUILD_RATE = Config.PROBE_BUILD_RATE; // 10 kg/day per probe
-        const SECONDS_PER_DAY = Config.SECONDS_PER_DAY || 86400;
-        
-        // Helper function to calculate dexterity rate in kg/day
-        const calculateDexterityRateForProbes = (probes, baseRatePerProbe, multiplier = 1.0) => {
-            return probes * baseRatePerProbe * multiplier; // kg/day
-        };
-        
-        // Sum allocations across all zones
-        let totalDysonProbes = 0;
-        let totalDysonDexterityPerDay = 0; // kg/day
-        let totalMiningProbes = 0;
-        let totalMiningDexterityPerDay = 0; // kg/day
-        let totalProbeConstructProbes = 0;
-        let totalProbeConstructDexterityPerDay = 0; // kg/day
-        let totalStructureProbes = 0;
-        let totalStructureDexterityPerDay = 0; // kg/day
-        
-        // Legacy allocations
-        totalDysonProbes += (allocations.dyson?.probe || 0) + (allocations.dyson?.construction_probe || 0);
-        totalDysonDexterityPerDay += calculateDexterityRateForProbes(
-            (allocations.dyson?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
-        ) + calculateDexterityRateForProbes(
-            (allocations.dyson?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
-        );
-        
-        totalMiningProbes += (allocations.harvest?.probe || 0) + (allocations.harvest?.miner_probe || 0);
-        totalMiningDexterityPerDay += calculateDexterityRateForProbes(
-            (allocations.harvest?.probe || 0), PROBE_HARVEST_RATE, totalMultiplier
-        ) + calculateDexterityRateForProbes(
-            (allocations.harvest?.miner_probe || 0), PROBE_HARVEST_RATE * 1.5, totalMultiplier
-        );
-        
-        totalProbeConstructProbes += (allocations.construct?.probe || 0) + (allocations.construct?.construction_probe || 0);
-        totalProbeConstructDexterityPerDay += calculateDexterityRateForProbes(
-            (allocations.construct?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
-        ) + calculateDexterityRateForProbes(
-            (allocations.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
-        );
-        
-        // Zone-based allocations
-        for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
-            totalDysonProbes += Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
+        // Reuse cached calculations if inputs haven't changed
+        if (this.lastCalculationKey !== calculationKey || !this.cachedCalculations) {
+            // Get research multiplier
+            const roboticBonus = breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0;
+            const totalMultiplier = 1.0 + (roboticBonus || 0);
+            
+            // Calculate actual rates in kg/day
+            // Base rates from config
+            const PROBE_HARVEST_RATE = Config.PROBE_HARVEST_RATE; // 100 kg/day per probe
+            const PROBE_BUILD_RATE = Config.PROBE_BUILD_RATE; // 10 kg/day per probe
+            
+            // Helper function to calculate dexterity rate in kg/day
+            const calculateDexterityRateForProbes = (probes, baseRatePerProbe, multiplier = 1.0) => {
+                return probes * baseRatePerProbe * multiplier; // kg/day
+            };
+            
+            // Sum allocations across all zones
+            let totalDysonProbes = 0;
+            let totalDysonDexterityPerDay = 0; // kg/day
+            let totalMiningProbes = 0;
+            let totalMiningDexterityPerDay = 0; // kg/day
+            let totalProbeConstructProbes = 0;
+            let totalProbeConstructDexterityPerDay = 0; // kg/day
+            let totalStructureProbes = 0;
+            let totalStructureDexterityPerDay = 0; // kg/day
+            
+            // Legacy allocations
+            totalDysonProbes += (allocations.dyson?.probe || 0) + (allocations.dyson?.construction_probe || 0);
             totalDysonDexterityPerDay += calculateDexterityRateForProbes(
-                (zoneAllocs.dyson?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
+                (allocations.dyson?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
             ) + calculateDexterityRateForProbes(
-                (zoneAllocs.dyson?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                (allocations.dyson?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
             );
             
-            totalMiningProbes += Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
+            totalMiningProbes += (allocations.harvest?.probe || 0) + (allocations.harvest?.miner_probe || 0);
             totalMiningDexterityPerDay += calculateDexterityRateForProbes(
-                (zoneAllocs.harvest?.probe || 0), PROBE_HARVEST_RATE, totalMultiplier
+                (allocations.harvest?.probe || 0), PROBE_HARVEST_RATE, totalMultiplier
             ) + calculateDexterityRateForProbes(
-                (zoneAllocs.harvest?.miner_probe || 0), PROBE_HARVEST_RATE * 1.5, totalMultiplier
+                (allocations.harvest?.miner_probe || 0), PROBE_HARVEST_RATE * 1.5, totalMultiplier
             );
             
-            const constructProbes = Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
-            totalProbeConstructProbes += constructProbes;
+            totalProbeConstructProbes += (allocations.construct?.probe || 0) + (allocations.construct?.construction_probe || 0);
             totalProbeConstructDexterityPerDay += calculateDexterityRateForProbes(
-                (zoneAllocs.construct?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
+                (allocations.construct?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
             ) + calculateDexterityRateForProbes(
-                (zoneAllocs.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                (allocations.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
             );
             
-            // Structure building probes (based on build_allocation slider)
-            const buildAllocation = gameState.build_allocation || 50; // 0 = all structures, 100 = all probes
+            // Zone-based allocations
+            for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
+                totalDysonProbes += Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
+                totalDysonDexterityPerDay += calculateDexterityRateForProbes(
+                    (zoneAllocs.dyson?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
+                ) + calculateDexterityRateForProbes(
+                    (zoneAllocs.dyson?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                );
+                
+                totalMiningProbes += Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
+                totalMiningDexterityPerDay += calculateDexterityRateForProbes(
+                    (zoneAllocs.harvest?.probe || 0), PROBE_HARVEST_RATE, totalMultiplier
+                ) + calculateDexterityRateForProbes(
+                    (zoneAllocs.harvest?.miner_probe || 0), PROBE_HARVEST_RATE * 1.5, totalMultiplier
+                );
+                
+                const constructProbes = Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
+                totalProbeConstructProbes += constructProbes;
+                totalProbeConstructDexterityPerDay += calculateDexterityRateForProbes(
+                    (zoneAllocs.construct?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
+                ) + calculateDexterityRateForProbes(
+                    (zoneAllocs.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                );
+                
+                // Structure building probes (based on build_allocation slider)
+                const structureFraction = (100 - buildAllocation) / 100.0;
+                const structureBuildingProbes = constructProbes * structureFraction;
+                totalStructureProbes += structureBuildingProbes;
+                totalStructureDexterityPerDay += calculateDexterityRateForProbes(
+                    structureBuildingProbes, PROBE_BUILD_RATE, totalMultiplier
+                );
+            }
+            
+            // Also calculate structure probes from legacy allocations
+            const legacyConstructProbes = (allocations.construct?.probe || 0) + (allocations.construct?.construction_probe || 0);
             const structureFraction = (100 - buildAllocation) / 100.0;
-            const structureBuildingProbes = constructProbes * structureFraction;
-            totalStructureProbes += structureBuildingProbes;
+            const legacyStructureProbes = legacyConstructProbes * structureFraction;
+            totalStructureProbes += legacyStructureProbes;
             totalStructureDexterityPerDay += calculateDexterityRateForProbes(
-                structureBuildingProbes, PROBE_BUILD_RATE, totalMultiplier
+                legacyStructureProbes, PROBE_BUILD_RATE, totalMultiplier
             );
+            
+            // Cache the results
+            this.cachedCalculations = {
+                totalDysonProbes,
+                totalDysonDexterityPerDay,
+                totalMiningProbes,
+                totalMiningDexterityPerDay,
+                totalProbeConstructProbes,
+                totalProbeConstructDexterityPerDay,
+                totalStructureProbes,
+                totalStructureDexterityPerDay
+            };
+            this.lastCalculationKey = calculationKey;
         }
         
-        // Also calculate structure probes from legacy allocations
-        const legacyConstructProbes = (allocations.construct?.probe || 0) + (allocations.construct?.construction_probe || 0);
-        const buildAllocation = gameState.build_allocation || 50;
-        const structureFraction = (100 - buildAllocation) / 100.0;
-        const legacyStructureProbes = legacyConstructProbes * structureFraction;
-        totalStructureProbes += legacyStructureProbes;
-        totalStructureDexterityPerDay += calculateDexterityRateForProbes(
-            legacyStructureProbes, PROBE_BUILD_RATE, totalMultiplier
-        );
+        // Use cached calculations
+        const {
+            totalDysonProbes,
+            totalDysonDexterityPerDay,
+            totalMiningProbes,
+            totalMiningDexterityPerDay,
+            totalProbeConstructProbes,
+            totalProbeConstructDexterityPerDay,
+            totalStructureProbes,
+            totalStructureDexterityPerDay
+        } = this.cachedCalculations;
         
         // Update Dyson dexterity - use actual Dyson construction rate from gameState (kg/day)
         const dysonConstructionRate = gameState.dyson_construction_rate || 0; // kg/day from backend
