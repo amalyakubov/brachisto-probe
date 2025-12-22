@@ -260,6 +260,28 @@ class ResourceDisplay {
                 <div class="tooltip-value" style="font-size: 16px; color: #4a9eff; font-weight: bold;">${this.formatNumber(metal)} kg</div>
             </div>`;
             
+            // Dexterity breakdown from probes (if available)
+            if (breakdown && breakdown.probes && breakdown.probes.breakdown) {
+                const zoneBreakdown = breakdown.probes.breakdown;
+                if (Object.keys(zoneBreakdown).length > 0) {
+                    html += `<div class="tooltip-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(74, 158, 255, 0.2);">
+                        <div class="tooltip-title">Dexterity by Zone (from Probes):</div>`;
+                    
+                    const zoneEntries = Object.entries(zoneBreakdown)
+                        .sort((a, b) => b[1].baseDexterity - a[1].baseDexterity); // Sort by dexterity descending
+                    
+                    zoneEntries.forEach(([zoneId, data]) => {
+                        const zoneName = zoneId === 'global' ? 'Global' : zoneId.charAt(0).toUpperCase() + zoneId.slice(1).replace(/_/g, ' ');
+                        html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 4px;">
+                            <span style="color: rgba(255, 255, 255, 0.8);">${zoneName} (${data.probeCount} probes):</span>
+                            <span style="color: #4a9eff; font-weight: bold; margin-left: 8px;">${this.formatNumber(data.baseDexterity)} kg/s</span>
+                        </div>`;
+                    });
+                    
+                    html += `</div>`;
+                }
+            }
+            
             // Production breakdown
             html += `<div class="tooltip-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(74, 158, 255, 0.2);">
                 <div class="tooltip-title">Production Rate Breakdown:</div>`;
@@ -273,9 +295,58 @@ class ResourceDisplay {
             
             // Check for mining structures
             const structures = gameState.structures || {};
+            const structuresByZone = gameState.structures_by_zone || {};
             let structureProduction = 0;
-            // Note: Mining structures would contribute here, but we'd need building data
-            // For now, we'll show if there's any structure production
+            const structureBreakdown = {}; // {buildingId: {name: string, count: number, production: number}}
+            
+            // Calculate mining structure contributions
+            if (this.buildings) {
+                for (const [zoneId, zoneStructures] of Object.entries(structuresByZone)) {
+                    for (const [buildingId, count] of Object.entries(zoneStructures)) {
+                        if (count <= 0) continue;
+                        
+                        let building = null;
+                        for (const category in this.buildings) {
+                            if (Array.isArray(this.buildings[category])) {
+                                building = this.buildings[category].find(b => b.id === buildingId);
+                                if (building) break;
+                            }
+                        }
+                        
+                        if (building) {
+                            const effects = building.effects || {};
+                            const metalProduction = effects.metal_production_per_second || 0;
+                            if (metalProduction > 0) {
+                                const totalProduction = metalProduction * count;
+                                structureProduction += totalProduction;
+                                
+                                if (!structureBreakdown[buildingId]) {
+                                    structureBreakdown[buildingId] = {
+                                        name: building.name || buildingId,
+                                        count: 0,
+                                        production: 0
+                                    };
+                                }
+                                structureBreakdown[buildingId].count += count;
+                                structureBreakdown[buildingId].production += totalProduction;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Show mining structure breakdown if available
+            if (Object.keys(structureBreakdown).length > 0) {
+                const structureEntries = Object.entries(structureBreakdown)
+                    .sort((a, b) => b[1].production - a[1].production); // Sort by production descending
+                
+                structureEntries.forEach(([buildingId, data]) => {
+                    html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 4px;">
+                        <span style="color: rgba(255, 255, 255, 0.8);">${data.name} (×${data.count}):</span>
+                        <span style="color: #4a9eff; font-weight: bold; margin-left: 8px;">${this.formatNumber(data.production)} kg/s</span>
+                    </div>`;
+                });
+            }
             
             html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(74, 158, 255, 0.2);">
                 <span style="color: rgba(255, 255, 255, 0.95); font-weight: bold;">Total Production:</span>
@@ -347,6 +418,12 @@ class ResourceDisplay {
                         html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 4px;">
                             <span style="color: rgba(255, 255, 255, 0.8);">Structures:</span>
                             <span style="color: #4a9eff; font-weight: bold; margin-left: 8px;">${this.formatEnergy(breakdown.production.breakdown.structures)}</span>
+                        </div>`;
+                    }
+                    if (breakdown.production.breakdown.dyson_sphere > 0) {
+                        html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 4px;">
+                            <span style="color: rgba(255, 255, 255, 0.8);">Dyson Sphere:</span>
+                            <span style="color: #4a9eff; font-weight: bold; margin-left: 8px;">${this.formatEnergy(breakdown.production.breakdown.dyson_sphere)}</span>
                         </div>`;
                     }
                 }
@@ -444,9 +521,23 @@ class ResourceDisplay {
             }
             if (breakdown.structures && breakdown.structures.total > 0) {
                 html += `<div class="tooltip-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(74, 158, 255, 0.2);">
-                    <div class="tooltip-title">Research Structures:</div>
-                    <div class="tooltip-value">${this.formatFLOPS(breakdown.structures.total || 0)}</div>
-                </div>`;
+                    <div class="tooltip-title">Research Structures:</div>`;
+                
+                // Show breakdown by structure type if available
+                if (breakdown.structures.breakdown && Object.keys(breakdown.structures.breakdown).length > 0) {
+                    const structureEntries = Object.entries(breakdown.structures.breakdown)
+                        .sort((a, b) => b[1].flops - a[1].flops); // Sort by FLOPS descending
+                    
+                    structureEntries.forEach(([buildingId, data]) => {
+                        html += `<div class="tooltip-item" style="margin-left: 8px; margin-top: 4px;">
+                            <span style="color: rgba(255, 255, 255, 0.8);">${data.name} (×${data.count}):</span>
+                            <span style="color: #4a9eff; font-weight: bold; margin-left: 8px;">${this.formatFLOPS(data.flops)}</span>
+                        </div>`;
+                    });
+                } else {
+                    html += `<div class="tooltip-value">${this.formatFLOPS(breakdown.structures.total || 0)}</div>`;
+                }
+                html += `</div>`;
             }
             html += `<div class="tooltip-section" style="margin-top: 12px; padding-top: 12px; border-top: 2px solid rgba(74, 158, 255, 0.4);">
                 <div class="tooltip-title">Total Intelligence:</div>

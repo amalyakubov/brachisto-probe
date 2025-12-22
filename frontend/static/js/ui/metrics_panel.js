@@ -172,9 +172,9 @@ class MetricsPanel {
         ) + this.calculateDexterityForProbes(
             (allocations.construct?.construction_probe || 0), 1.8, totalMultiplier
         );
-        const probeRateEl = document.getElementById('metric-dex-probes-rate');
+        const probeConstructRateEl = document.getElementById('metric-dex-probes-rate');
         const probeCountEl = document.getElementById('metric-dex-probes-count');
-        if (probeRateEl) probeRateEl.textContent = `${this.formatNumber(probeConstructDexterity)} kg/s`;
+        if (probeConstructRateEl) probeConstructRateEl.textContent = `${this.formatNumber(probeConstructDexterity)} kg/s`;
         if (probeCountEl) probeCountEl.textContent = `(${this.formatNumberWithCommas(probeConstructProbes)} probes)`;
 
         // Structure construction dexterity (from factory production)

@@ -80,19 +80,19 @@ class PurchasePanel {
             html += `</div>`;
         }
 
-        // Factories section
-        const factories = this.buildings.factories || [];
-        if (factories.length > 0) {
-            const isCollapsed = this.collapsedCategories.has('factories');
+        // Energy section (first)
+        const energy = this.buildings.energy || [];
+        if (energy.length > 0) {
+            const isCollapsed = this.collapsedCategories.has('energy');
             html += '<div class="purchase-section">';
-            html += `<div class="section-title ${isCollapsed ? 'collapsed' : ''}" onclick="purchasePanel.toggleCategory('factories')">`;
-            html += '<span class="collapse-icon">▼</span>Factories</div>';
+            html += `<div class="section-title ${isCollapsed ? 'collapsed' : ''}" onclick="purchasePanel.toggleCategory('energy')">`;
+            html += '<span class="collapse-icon">▼</span>Energy</div>';
             html += `<div class="section-content ${isCollapsed ? 'collapsed' : ''}">`;
-            html += this.renderBuildings(factories, 'factories');
+            html += this.renderBuildings(energy, 'energy');
             html += '</div></div>';
         }
 
-        // Mining section
+        // Mining section (second)
         const mining = this.buildings.mining || [];
         if (mining.length > 0) {
             const isCollapsed = this.collapsedCategories.has('mining');
@@ -104,15 +104,27 @@ class PurchasePanel {
             html += '</div></div>';
         }
 
-        // Energy section
-        const energy = this.buildings.energy || [];
-        if (energy.length > 0) {
-            const isCollapsed = this.collapsedCategories.has('energy');
+        // Factories section (third)
+        const factories = this.buildings.factories || [];
+        if (factories.length > 0) {
+            const isCollapsed = this.collapsedCategories.has('factories');
             html += '<div class="purchase-section">';
-            html += `<div class="section-title ${isCollapsed ? 'collapsed' : ''}" onclick="purchasePanel.toggleCategory('energy')">`;
-            html += '<span class="collapse-icon">▼</span>Energy</div>';
+            html += `<div class="section-title ${isCollapsed ? 'collapsed' : ''}" onclick="purchasePanel.toggleCategory('factories')">`;
+            html += '<span class="collapse-icon">▼</span>Factories</div>';
             html += `<div class="section-content ${isCollapsed ? 'collapsed' : ''}">`;
-            html += this.renderBuildings(energy, 'energy');
+            html += this.renderBuildings(factories, 'factories');
+            html += '</div></div>';
+        }
+        
+        // Computing section
+        const computing = this.buildings.computing || [];
+        if (computing.length > 0) {
+            const isCollapsed = this.collapsedCategories.has('computing');
+            html += '<div class="purchase-section">';
+            html += `<div class="section-title ${isCollapsed ? 'collapsed' : ''}" onclick="purchasePanel.toggleCategory('computing')">`;
+            html += '<span class="collapse-icon">▼</span>Computing</div>';
+            html += `<div class="section-content ${isCollapsed ? 'collapsed' : ''}">`;
+            html += this.renderBuildings(computing, 'computing');
             html += '</div></div>';
         }
 
@@ -248,6 +260,29 @@ class PurchasePanel {
                 statsHtml = '<div class="building-stats">';
                 statsHtml += `<div class="building-stat-line">${energyDisplay}/s</div>`;
                 statsHtml += '</div>';
+            } else if (effects.intelligence_flops !== undefined) {
+                // Computing building (orbital data center)
+                const flops = effects.intelligence_flops;
+                const powerKw = effects.energy_consumption_per_second || 0;
+                let flopsDisplay = '';
+                if (flops >= 1e21) {
+                    flopsDisplay = `${(flops/1e21).toFixed(2)} ZFLOPS`;
+                } else if (flops >= 1e18) {
+                    flopsDisplay = `${(flops/1e18).toFixed(2)} EFLOPS`;
+                } else if (flops >= 1e15) {
+                    flopsDisplay = `${(flops/1e15).toFixed(2)} PFLOPS`;
+                } else if (flops >= 1e12) {
+                    flopsDisplay = `${(flops/1e12).toFixed(2)} TFLOPS`;
+                } else {
+                    flopsDisplay = flops.toExponential(2) + ' FLOPS';
+                }
+                const powerDisplay = powerKw >= 1e6 ? `${(powerKw/1e6).toFixed(1)}MW` : 
+                                     powerKw >= 1e3 ? `${(powerKw/1e3).toFixed(1)}kW` : 
+                                     `${powerKw.toFixed(0)}W`;
+                statsHtml = '<div class="building-stats">';
+                statsHtml += `<div class="building-stat-line">${flopsDisplay}</div>`;
+                statsHtml += `<div class="building-stat-line">${powerDisplay}</div>`;
+                statsHtml += '</div>';
             } else if (effects.energy_consumption_per_second !== undefined) {
                 // Other building with power draw
                 const powerKw = effects.energy_consumption_per_second;
@@ -260,8 +295,24 @@ class PurchasePanel {
             // Check if building is allowed in selected zone (if zone is selected)
             let isAllowed = true;
             if (this.selectedZone) {
-                const allowedZones = building.allowed_orbital_zones || [];
-                isAllowed = allowedZones.includes(this.selectedZone);
+                // Check if this is the Dyson zone
+                const zone = this.orbitalZones.find(z => z.id === this.selectedZone);
+                const isDysonZone = zone && zone.is_dyson_zone;
+                
+                // Get building category
+                const buildingCategory = category;
+                
+                // Mining buildings cannot be built in Dyson zone (no minerals to mine)
+                if (isDysonZone && buildingCategory === 'mining') {
+                    isAllowed = false;
+                } else if (isDysonZone) {
+                    // Non-mining buildings can be built in Dyson zone even if not in allowed_orbital_zones
+                    isAllowed = true;
+                } else {
+                    // For other zones, check allowed_orbital_zones
+                    const allowedZones = building.allowed_orbital_zones || [];
+                    isAllowed = allowedZones.includes(this.selectedZone);
+                }
             }
             
             const disabledClass = (!this.selectedZone || !isAllowed) ? 'disabled' : '';
@@ -446,11 +497,11 @@ class PurchasePanel {
             const buildingId = checkbox.getAttribute('data-building-id');
             if (buildingId && this.selectedZone) {
                 // Check if this building is enabled for the selected zone
-                const enabledKey = `${this.selectedZone}_${buildingId}`;
+                const enabledKey = `${this.selectedZone}::${buildingId}`;
                 checkbox.checked = enabledConstruction.includes(enabledKey);
             } else if (buildingId) {
                 // No zone selected - check if enabled in any zone (for legacy compatibility)
-                checkbox.checked = enabledConstruction.some(key => key.endsWith(`_${buildingId}`));
+                checkbox.checked = enabledConstruction.some(key => key.endsWith(`::${buildingId}`));
             }
         });
         
@@ -467,12 +518,12 @@ class PurchasePanel {
             
             if (this.selectedZone) {
                 // Show progress for selected zone
-                const enabledKey = `${this.selectedZone}_${buildingId}`;
+                const enabledKey = `${this.selectedZone}::${buildingId}`;
                 progress = structureProgress[enabledKey] || 0;
             } else {
                 // No zone selected - show total progress across all zones
                 progress = Object.entries(structureProgress)
-                    .filter(([key]) => key.endsWith(`_${buildingId}`))
+                    .filter(([key]) => key.endsWith(`::${buildingId}`))
                     .reduce((sum, [, val]) => sum + val, 0);
             }
             

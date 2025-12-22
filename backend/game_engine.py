@@ -48,45 +48,35 @@ class GameEngine:
         
         # Initialize probes by zone and starting buildings
         zones = self.data_loader.load_orbital_mechanics()
-        initial_probes = self.config.get('initial_probes', 10)  # Start with 10 probes
-        dyson_zone_id = 'dyson_sphere'
-        mercury_zone_id = 'mercury'
-        asteroid_belt_zone_id = 'asteroid_belt'
+        initial_probes = self.config.get('initial_probes', 1)  # Start with 1 probe
+        earth_zone_id = 'earth'
         
         for zone in zones:
             zone_id = zone['id']
             self.probes_by_zone[zone_id] = {'probe': 0}
             self.structures_by_zone[zone_id] = {}
             
-            if zone_id == dyson_zone_id:
-                # Dyson zone starts with 10 probes and 1 mobile factory
+            if zone_id == earth_zone_id:
+                # Earth starts with 1 probe, 1 solar array, 1 mining station, 1 mobile factory
                 self.probes_by_zone[zone_id] = {'probe': initial_probes}
                 self.structures_by_zone[zone_id] = {
+                    'solar_array_basic': 1,
+                    'basic_mining_station': 1,
                     'mobile_factory': 1
                 }
                 # Also add to legacy global structures for backward compatibility
-                self.structures['mobile_factory'] = 1
-            elif zone_id == mercury_zone_id:
-                # Mercury starts with 1 solar array (orbital array)
-                self.structures_by_zone[zone_id] = {
-                    'solar_array_basic': 1
-                }
-                # Also add to legacy global structures for backward compatibility
                 self.structures['solar_array_basic'] = 1
-            elif zone_id == asteroid_belt_zone_id:
-                # Asteroid belt starts with 1 mining station
-                self.structures_by_zone[zone_id] = {
-                    'basic_mining_station': 1
-                }
-                # Also add to legacy global structures for backward compatibility
                 self.structures['basic_mining_station'] = 1
+                self.structures['mobile_factory'] = 1
             
             # Initialize zone allocations
             if zone.get('is_dyson_zone', False):
-                # Dyson zone: construct vs replicate
+                # Dyson zone: dyson, construct, replicate
                 self.probe_allocations_by_zone[zone_id] = {
-                    'construct': {'probe': 0},  # Building Dyson
-                    'replicate': {'probe': 0}   # Replicating probes
+                    'dyson': {'probe': 0},      # Building Dyson
+                    'construct': {'probe': 0},  # Building structures
+                    'replicate': {'probe': 0},   # Replicating probes
+                    'harvest': {'probe': 0}     # No mining allowed
                 }
             else:
                 # Regular zones: mining vs replication vs construction
@@ -119,7 +109,7 @@ class GameEngine:
         self.build_allocation = 100  # Default: 0% structures, 100% probes
         
         # Dyson power allocation: 0 = all economy (energy), 100 = all compute (intelligence)
-        self.dyson_power_allocation = 0  # Default: 0% compute, 100% economy
+        self.dyson_power_allocation = 50  # Default: 50% compute power
         
         # Harvest zone selection (which zone to harvest from)
         self.harvest_zone = 'mercury'  # Default to Mercury
@@ -149,27 +139,20 @@ class GameEngine:
         self.zone_depleted = {zone_id: False for zone_id in self.zone_metal_remaining.keys()}
         
         # Zone-specific policies: {zoneId: {'mining_slider': 0-100, 'replication_slider': 0-100, 'construction_slider': 0-100}}
-        # For Dyson zone: {'construct_slider': 0-100} (0 = all replicate, 100 = all construct)
+        # For Dyson zone: {'dyson_build_slider': 0-100, 'replication_slider': 0-100} (dyson_build_slider: 0 = all other, 100 = all dyson build)
         # Sliders: mining_slider (0 = all build, 100 = all mine), replication_slider (0 = all construct, 100 = all replicate)
         self.zone_policies = {}
         for zone in zones:
             zone_id = zone['id']
             if zone.get('is_dyson_zone', False):
-                self.zone_policies[zone_id] = {'construct_slider': 50}  # Default: 50% construct, 50% replicate
+                self.zone_policies[zone_id] = {'dyson_build_slider': 90, 'replication_slider': 100}  # Default: 90% dyson build, 100% replicate
             else:
-                if zone_id == 'earth':
-                    # Earth default: 100% build (0% mine), 100% replicate (0% construct)
-                    self.zone_policies[zone_id] = {
-                        'mining_slider': 0,  # 0 = all build, 100 = all mine
-                        'replication_slider': 100,  # 0 = all construct, 100 = all replicate
-                        'construction_slider': 0  # Legacy compatibility
-                    }
-                else:
-                    self.zone_policies[zone_id] = {
-                        'mining_slider': 50,  # Default: 50% mining, 50% replication/construction
-                        'replication_slider': 50,  # Within non-mining: 50% replicate, 50% construct
-                        'construction_slider': 50  # Legacy compatibility
-                    }
+                # All regular zones: 33% harvest, 66% build, 100% replicate, 0% structure
+                self.zone_policies[zone_id] = {
+                    'mining_slider': 33,  # 33% harvest, 66% build
+                    'replication_slider': 100,  # 100% replicate, 0% construct (structure)
+                    'construction_slider': 50  # Legacy compatibility
+                }
         
         # Minimum probe threshold per zone: {zoneId: minimum_count}
         self.zone_min_probes = {zone_id: 0 for zone_id in self.zone_metal_remaining.keys()}
@@ -524,8 +507,9 @@ class GameEngine:
                         metal_cost_per_probe = probe_data.get('base_cost_metal', Config.PROBE_MASS)
                 probe_metal_consumption_rate += rate * metal_cost_per_probe
         
-        # Dyson construction metal consumption (50% efficiency)
-        dyson_metal_consumption_rate = dyson_construction_rate_after_energy * 0.5
+        # Dyson construction metal consumption will be calculated later
+        # when we know the actual build rate from structure allocation
+        dyson_metal_consumption_rate = 0.0
         
         # Structure construction metal consumption - only count if structures are actually being built
         structure_metal_consumption_rate = 0.0
@@ -562,7 +546,9 @@ class GameEngine:
         
         # Apply metal throttling to production activities
         probe_rate = {pt: rate * metal_throttle for pt, rate in probe_rate_after_energy.items()}
-        dyson_construction_rate = dyson_construction_rate_after_energy * metal_throttle
+        # Dyson construction rate will be calculated from structure build rate allocation
+        # (calculated later in the structure building section)
+        dyson_construction_rate = 0.0
         
         # Update metal stockpile: add production only
         # Note: Consumption (for probes, Dyson, structures) is handled incrementally
@@ -653,8 +639,7 @@ class GameEngine:
                 # Calculate factory capacity per zone
                 for zone in zones:
                     zone_id = zone['id']
-                    if zone.get('is_dyson_zone', False):
-                        continue  # Factories don't produce in Dyson zone
+                    # Allow factories in Dyson zone (but not mining structures)
                     
                     zone_structures = self.structures_by_zone.get(zone_id, {})
                     zone_factory_rate = 0.0
@@ -833,14 +818,17 @@ class GameEngine:
                     self._auto_allocate_probes()
         
         # Structure building (probes building structures using 0.1 kg/s per probe)
+        # Note: In Dyson zone, probes allocated to "construct" only build structures (not Dyson)
+        # Dyson construction uses probes allocated to "dyson" activity (via Dyson slider)
         structure_building_fraction = 1.0 - (build_allocation / 100.0)
         structure_building_probes = constructing_probes * structure_building_fraction
         
-        if structure_building_probes > 0 and len(self.enabled_construction) > 0:
-            # Base build rate: 0.1 kg/s per probe
-            base_structure_build_rate_kg_s = structure_building_probes * Config.PROBE_BUILD_RATE
-            structure_build_rate_kg_s = base_structure_build_rate_kg_s * energy_throttle * metal_throttle
-            
+        # Calculate total structure build rate
+        base_structure_build_rate_kg_s = structure_building_probes * Config.PROBE_BUILD_RATE
+        structure_build_rate_kg_s = base_structure_build_rate_kg_s * energy_throttle * metal_throttle
+        
+        # Use structure build rate for building construction (only structures, not Dyson)
+        if structure_build_rate_kg_s > 0 and len(self.enabled_construction) > 0:
             # Get enabled buildings that are in progress or need to be started
             enabled_buildings = []
             for building_id in self.enabled_construction:
@@ -930,9 +918,33 @@ class GameEngine:
         # Recalculate dexterity
         self.dexterity = self._calculate_dexterity()
         
-        # Update Dyson sphere construction (with energy throttling and metal checks)
-        # Use 0.1 kg/s per probe for Dyson too
-        idle_probes_dyson = self._update_dyson_sphere_construction(delta_time, dyson_construction_rate)
+        # Update Dyson sphere construction (using probes allocated to "dyson" activity)
+        # Get probes allocated to Dyson construction from zone activities
+        zones = self.data_loader.load_orbital_mechanics()
+        dyson_zone_id = None
+        for zone in zones:
+            if zone.get('is_dyson_zone', False):
+                dyson_zone_id = zone['id']
+                break
+        
+        # Calculate Dyson construction rate from probes allocated to "dyson" activity
+        dyson_construction_rate_kg_s = 0.0
+        if dyson_zone_id:
+            zone_activities = self._calculate_zone_activities()
+            dyson_activity = zone_activities.get(dyson_zone_id, {})
+            dyson_probes = dyson_activity.get('dyson', 0)
+            
+            if dyson_probes > 0:
+                # Base rate: 0.1 kg/s per probe
+                base_dyson_rate = dyson_probes * Config.PROBE_BUILD_RATE
+                # Apply throttling
+                dyson_construction_rate_kg_s = base_dyson_rate * energy_throttle * metal_throttle
+                
+                # Apply research bonuses
+                research_bonus = self._get_research_bonus('dyson_swarm_construction', 'dyson_construction_rate_multiplier', 1.0)
+                dyson_construction_rate_kg_s *= research_bonus
+        
+        idle_probes_dyson = self._update_dyson_sphere_construction(delta_time, dyson_construction_rate_kg_s)
         
         # Check zone depletion
         self._check_zone_depletion()
@@ -1250,22 +1262,32 @@ class GameEngine:
             policy = self.zone_policies.get(zone_id, {})
             
             if zone.get('is_dyson_zone', False):
-                # Dyson zone: construct vs replicate
-                construct_slider = policy.get('construct_slider', 50) / 100.0
-                construct_count = zone_probes * construct_slider
-                replicate_count = zone_probes * (1.0 - construct_slider)
+                # Dyson zone: Three sliders
+                # 1. Dyson build slider: splits between Dyson construction and other (build/replicate)
+                # Slider: 0 = all Build, 100 = all Dyson (inverted from visual)
+                dyson_build_slider = policy.get('dyson_build_slider', 90) / 100.0
+                # Invert: slider 100 (bottom/Build label) = all Dyson, slider 0 (top/Dyson label) = all Build
+                dyson_fraction = dyson_build_slider  # 100 = all Dyson, 0 = all Build
+                dyson_build_count = zone_probes * dyson_fraction
+                other_count = zone_probes * (1.0 - dyson_fraction)
+                
+                # 2. Replication slider: splits "other" between structures and replicate
+                replication_slider = policy.get('replication_slider', 100) / 100.0
+                replicate_count = other_count * replication_slider
+                construct_count = other_count * (1.0 - replication_slider)
+                
                 activities[zone_id] = {
-                    'construct': construct_count,  # Building Dyson
+                    'construct': construct_count,  # Building structures
                     'replicate': replicate_count,
                     'harvest': 0,
-                    'dyson': construct_count  # Legacy compatibility
+                    'dyson': dyson_build_count  # Building Dyson
                 }
             else:
                 # Regular zones: mining vs replication/construction
                 # mining_slider: 0 = all build, 100 = all mine
                 # replication_slider: 0 = all construct, 100 = all replicate
                 mining_slider = policy.get('mining_slider', 50) / 100.0
-                replication_slider = policy.get('replication_slider', 50) / 100.0
+                replication_slider = policy.get('replication_slider', 100) / 100.0
                 
                 mining_count = zone_probes * mining_slider
                 build_count = zone_probes * (1.0 - mining_slider)  # Non-mining = building
@@ -1331,7 +1353,11 @@ class GameEngine:
                     rate += zone_contribution
         
         # Mining structures (harvest from selected zone)
-        if self.harvest_zone in self.zone_metal_remaining and not self.zone_depleted[self.harvest_zone]:
+        # Note: Mining structures should not operate in Dyson zone (no minerals to mine)
+        zones = self.data_loader.load_orbital_mechanics()
+        harvest_zone_data = next((z for z in zones if z['id'] == self.harvest_zone), None)
+        if (harvest_zone_data and not harvest_zone_data.get('is_dyson_zone', False) and 
+            self.harvest_zone in self.zone_metal_remaining and not self.zone_depleted[self.harvest_zone]):
             for building_id, count in self.structures.items():
                 building = self.data_loader.get_building_by_id(building_id)
                 if building:
@@ -1347,6 +1373,15 @@ class GameEngine:
                             zone_contribution = min(structure_rate, zone_metal)
                             zone_depletion[self.harvest_zone] += zone_contribution
                             rate += zone_contribution
+                            
+                            # Mining structures also reduce zone mass (mass conservation)
+                            # Calculate total mass mined from metal contribution
+                            metal_percentage = harvest_zone_data.get('metal_percentage', 0.32)
+                            if metal_percentage > 0:
+                                total_mass_mined = zone_contribution / metal_percentage
+                                if self.harvest_zone in self.zone_mass_remaining:
+                                    self.zone_mass_remaining[self.harvest_zone] -= total_mass_mined
+                                    self.zone_mass_remaining[self.harvest_zone] = max(0, self.zone_mass_remaining[self.harvest_zone])
         
         # Research bonuses
         research_bonus = self._get_research_bonus('production_efficiency', 'harvest_efficiency_multiplier', 1.0)
@@ -1459,6 +1494,8 @@ class GameEngine:
         Power conversion: 1 MW = 1 PFLOPS/s (1e15 FLOPS/s per 1e6 W)
         Or: 1 W = 1e9 FLOPS/s
         
+        Also includes compute from orbital data centers and other structures.
+        
         Returns the theoretical maximum compute production. Actual production is limited
         by energy available for compute (after other energy needs).
         """
@@ -1466,13 +1503,16 @@ class GameEngine:
         dyson_power_allocation = getattr(self, 'dyson_power_allocation', 0)
         compute_fraction = dyson_power_allocation / 100.0  # Fraction going to compute
         
+        total_intelligence_flops = 0.0
+        
+        # Dyson sphere compute
         if self.dyson_sphere_mass >= self.dyson_sphere_target_mass:
             # Complete Dyson sphere: all star's power
             # Sun's total power output: ~3.8e26 W
             sun_total_power = 3.8e26  # watts
             # Allocate based on slider and convert to compute: 1 W = 1e9 FLOPS/s
             compute_power = sun_total_power * compute_fraction
-            rate = compute_power * 1e9  # FLOPS/s
+            total_intelligence_flops += compute_power * 1e9  # FLOPS/s
         else:
             # While building: convert Dyson sphere power generation to compute
             # Each kg generates 5 kW = 5000 W
@@ -1480,9 +1520,46 @@ class GameEngine:
             dyson_power = self.dyson_sphere_mass * 5000  # 5000W = 5 kW per kg
             compute_power = dyson_power * compute_fraction
             # Conversion: 1 W = 1e9 FLOPS/s
-            rate = compute_power * 1e9  # FLOPS/s
+            total_intelligence_flops += compute_power * 1e9  # FLOPS/s
         
-        return rate
+        # Add compute from orbital data centers and other structures
+        # Check zone-based structures (new system)
+        for zone_id, zone_structures in self.structures_by_zone.items():
+            for building_id, count in zone_structures.items():
+                building = self.data_loader.get_building_by_id(building_id)
+                if building:
+                    effects = building.get('effects', {})
+                    intelligence_output_flops = effects.get('intelligence_flops', 0)
+                    if intelligence_output_flops > 0:
+                        total_intelligence_flops += intelligence_output_flops * count
+                    else:
+                        # Legacy: convert from intelligence_per_second
+                        intelligence_output = effects.get('intelligence_production_per_second', 0) or effects.get('intelligence_per_second', 0)
+                        total_intelligence_flops += intelligence_output * 1e12 * count
+        
+        # Also check legacy global structures for backward compatibility
+        for building_id, count in self.structures.items():
+            # Skip if already counted in zone structures
+            already_counted = False
+            for zone_structures in self.structures_by_zone.values():
+                if building_id in zone_structures:
+                    already_counted = True
+                    break
+            if already_counted:
+                continue
+            
+            building = self.data_loader.get_building_by_id(building_id)
+            if building:
+                effects = building.get('effects', {})
+                intelligence_output_flops = effects.get('intelligence_flops', 0)
+                if intelligence_output_flops > 0:
+                    total_intelligence_flops += intelligence_output_flops * count
+                else:
+                    # Legacy: convert from intelligence_per_second
+                    intelligence_output = effects.get('intelligence_production_per_second', 0) or effects.get('intelligence_per_second', 0)
+                    total_intelligence_flops += intelligence_output * 1e12 * count
+        
+        return total_intelligence_flops
     
     def _calculate_effective_intelligence_production(self, available_energy_for_compute):
         """Calculate effective intelligence production limited by available energy.
@@ -1664,33 +1741,16 @@ class GameEngine:
     def _calculate_dyson_construction_rate(self):
         """Calculate Dyson sphere construction rate (kg/s).
         
-        This is the theoretical maximum rate, not limited by resources.
-        The actual construction in _update_dyson_sphere_construction may be lower
-        due to resource constraints.
+        NOTE: This method is now deprecated. Dyson construction rate is calculated
+        in the tick() method by allocating a fraction of the structure build rate
+        based on the Dyson zone's dyson_build_slider policy.
+        
+        This method is kept for backward compatibility but returns 0.
+        The actual rate is calculated in tick() as dyson_build_rate_kg_s.
         """
-        if self.dyson_sphere_mass >= self.dyson_sphere_target_mass:
-            return 0.0  # Already complete
-        
-        # Get probes allocated to Dyson construction
-        dyson_allocation = self.probe_allocations.get('dyson', {})
-        total_dyson_probes = sum(dyson_allocation.values())
-        
-        if total_dyson_probes <= 0:
-            return 0.0
-        
-        # Calculate construction rate
-        # Base rate: 0.1 kg/s per probe
-        base_construction_rate = total_dyson_probes * Config.PROBE_BUILD_RATE  # 0.1 kg/s per probe
-        
-        # Apply research bonuses
-        research_bonus = self._get_research_bonus('dyson_swarm_construction', 'dyson_construction_rate_multiplier', 1.0)
-        construction_rate = base_construction_rate * research_bonus
-        
-        # Apply zone bonuses (use average for now)
-        zone_bonus = 1.0  # Could calculate based on probe locations
-        construction_rate *= zone_bonus
-        
-        return construction_rate
+        # Dyson construction is now handled by allocating structure build rate
+        # in the tick() method, not by allocating probes
+        return 0.0
     
     def _update_dyson_sphere_construction(self, delta_time, throttled_construction_rate):
         """Update Dyson sphere construction.
@@ -1949,6 +2009,23 @@ class GameEngine:
                 structure_production += base_energy * solar_multiplier * count
         breakdown['production']['base'] += structure_production
         breakdown['production']['breakdown']['structures'] = structure_production
+        
+        # Production: Dyson sphere energy
+        dyson_power_allocation = getattr(self, 'dyson_power_allocation', 0)  # 0 = all economy, 100 = all compute
+        economy_fraction = (100 - dyson_power_allocation) / 100.0  # Fraction going to economy/energy
+        
+        dyson_energy_production = 0.0
+        if self.dyson_sphere_mass >= self.dyson_sphere_target_mass:
+            # Complete Dyson sphere: all star's power
+            sun_total_power = 3.8e26  # watts
+            dyson_energy_production = sun_total_power * economy_fraction
+        else:
+            # During construction: 5 kW per kg
+            dyson_power = self.dyson_sphere_mass * 5000  # 5000W = 5 kW per kg
+            dyson_energy_production = dyson_power * economy_fraction
+        
+        breakdown['production']['base'] += dyson_energy_production
+        breakdown['production']['breakdown']['dyson_sphere'] = dyson_energy_production
         
         # Production: Energy Collection Efficiency research
         energy_collection_bonus = self._get_research_bonus('energy_collection', 'solar_efficiency_multiplier', 1.0)
@@ -2284,18 +2361,42 @@ class GameEngine:
         breakdown['probes']['base'] = base_intelligence_flops
         breakdown['probes']['total'] = base_intelligence_flops
         
-        # Research structures - in FLOPS
+        # Research structures - in FLOPS (from zone-based structures)
         structure_intelligence_flops = 0
+        
+        # Check zone-based structures (new system)
+        for zone_id, zone_structures in self.structures_by_zone.items():
+            for building_id, count in zone_structures.items():
+                building = self.data_loader.get_building_by_id(building_id)
+                if building:
+                    effects = building.get('effects', {})
+                    intelligence_output_flops = effects.get('intelligence_flops', 0)
+                    if intelligence_output_flops > 0:
+                        structure_intelligence_flops += intelligence_output_flops * count
+                    else:
+                        # Legacy: convert from intelligence_per_second
+                        intelligence_output = effects.get('intelligence_production_per_second', 0) or effects.get('intelligence_per_second', 0)
+                        structure_intelligence_flops += intelligence_output * 1e12 * count
+        
+        # Also check legacy global structures for backward compatibility
         for building_id, count in self.structures.items():
+            # Skip if already counted in zone structures
+            already_counted = False
+            for zone_structures in self.structures_by_zone.values():
+                if building_id in zone_structures:
+                    already_counted = True
+                    break
+            if already_counted:
+                continue
+            
             building = self.data_loader.get_building_by_id(building_id)
             if building:
                 effects = building.get('effects', {})
-                # Check for FLOPS directly, or convert from legacy intelligence_per_second
                 intelligence_output_flops = effects.get('intelligence_flops', 0)
                 if intelligence_output_flops > 0:
                     structure_intelligence_flops += intelligence_output_flops * count
                 else:
-                    # Legacy: convert from intelligence_per_second (assume 1 intelligence = 1e12 FLOPS)
+                    # Legacy: convert from intelligence_per_second
                     intelligence_output = effects.get('intelligence_production_per_second', 0) or effects.get('intelligence_per_second', 0)
                     structure_intelligence_flops += intelligence_output * 1e12 * count
         
@@ -2367,11 +2468,31 @@ class GameEngine:
     def _purchase_structure(self, action_data):
         """Toggle structure construction enabled/disabled."""
         building_id = action_data.get('building_id')
+        zone_id = action_data.get('zone_id', None)
         enabled = action_data.get('enabled', None)
         
         building = self.data_loader.get_building_by_id(building_id)
         if not building:
             raise ValueError(f"Building not found: {building_id}")
+        
+        # Check if building is allowed in the zone
+        if zone_id:
+            zones = self.data_loader.load_orbital_mechanics()
+            zone_data = next((z for z in zones if z['id'] == zone_id), None)
+            if zone_data:
+                is_dyson_zone = zone_data.get('is_dyson_zone', False)
+                building_category = self._get_building_category(building_id)
+                
+                # Mining buildings cannot be built in Dyson zone (no minerals to mine)
+                if is_dyson_zone and building_category == 'mining':
+                    raise ValueError(f"Mining buildings cannot be built in Dyson zone (no minerals to mine)")
+                
+                # For non-mining buildings in Dyson zone, allow them even if not in allowed_orbital_zones
+                # For other zones, check allowed_orbital_zones
+                if not is_dyson_zone:
+                    allowed_zones = building.get('allowed_orbital_zones', [])
+                    if allowed_zones and zone_id not in allowed_zones:
+                        raise ValueError(f"Building {building_id} is not allowed in zone {zone_id}")
         
         # Check prerequisites
         prerequisites = building.get('prerequisites', [])

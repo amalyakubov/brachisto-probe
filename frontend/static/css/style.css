@@ -330,14 +330,17 @@ body {
     margin-top: 2px;
 }
 
-/* Probe Summary Panel - Left Side (below metrics panel) */
+/* Probe Summary Panel - Top Left */
 .probe-summary-panel-container {
     position: absolute;
     left: 10px;
-    top: 160px;
-    width: 200px;
+    top: 10px;
+    width: 210px;
     z-index: 100;
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
 }
 
 .probe-summary-panel {
@@ -399,16 +402,29 @@ body {
     font-family: 'Courier New', monospace;
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    gap: 8px;
 }
 
 .probe-summary-breakdown-label {
     color: rgba(255, 255, 255, 0.6);
-    margin-right: 8px;
+    flex: 0 0 auto;
+    min-width: 60px;
 }
 
 .probe-summary-breakdown-value {
     color: rgba(255, 255, 255, 0.9);
     font-weight: 600;
+    flex: 1 1 auto;
+    text-align: right;
+}
+
+.probe-summary-breakdown-count {
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 500;
+    flex: 0 0 auto;
+    min-width: 40px;
+    text-align: right;
 }
 
 #game-canvas {
@@ -472,25 +488,208 @@ body {
     display: none;
 }
 
-/* Command Panel Column - Overlay on right side */
+/* Command Panel - Center Left (separate window) */
 .command-panel-column {
-    position: absolute;
-    width: auto;
-    display: none; /* Initially hidden, shown when zone is selected */
-    height: auto;
-    background: transparent;
-    display: flex;
-    flex-direction: column;
-    z-index: 500;
+    position: fixed;
+    left: 10px;
+    top: calc(50% + 60px);
+    transform: translateY(-50%); /* Center vertically */
+    width: auto; /* Auto width to accommodate side-by-side layout */
+    min-width: 200px; /* Minimum width for sliders only */
+    max-width: 500px; /* Maximum width when buildings are shown */
+    z-index: 100;
     pointer-events: none;
+    display: block !important; /* Always visible */
 }
 
 .command-panel-column * {
     pointer-events: auto;
 }
 
-.command-panel-column #command-panel-content {
+/* Command Panel Content */
+#command-panel-content {
     width: 100%;
+}
+
+#command-panel-content * {
+    pointer-events: auto;
+}
+
+.command-panel-panel {
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(5px);
+    border-radius: 5px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    height: 420px; /* Fixed height to prevent resizing */
+    display: flex;
+    flex-direction: column;
+}
+
+.command-panel-main-content {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.command-panel-left-column {
+    flex: 0 0 auto;
+    min-width: 200px;
+}
+
+.command-buildings-section {
+    flex: 0 0 auto;
+    min-width: 250px;
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    display: none; /* Hidden by default */
+    flex-direction: column;
+}
+
+.command-buildings-section[style*="display: flex"] {
+    display: flex !important;
+}
+
+.command-zone-indicator {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-weight: 500;
+}
+
+.command-sliders-container {
+    display: flex;
+    flex-direction: row;
+    gap: 20px;
+    justify-content: center;
+    align-items: flex-end;
+    min-height: 200px;
+    margin-bottom: 12px;
+}
+
+.command-no-zone-message {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    text-align: center;
+    padding: 20px 0;
+    font-style: italic;
+}
+
+.command-slider-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.command-slider-label-top,
+.command-slider-label-bottom {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    min-height: 14px;
+    display: flex;
+    align-items: center;
+}
+
+.command-slider-track-vertical {
+    position: relative;
+    width: 18px;
+    height: 120px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.command-slider-fill-vertical {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(255, 255, 255, 0.3);
+    transition: height 0.1s ease;
+    border-radius: 2px;
+}
+
+.command-slider-line-vertical {
+    position: absolute;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.9);
+    z-index: 5;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+.command-slider-vertical {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.command-slider-vertical::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    cursor: ns-resize;
+    border: none;
+    border-radius: 2px;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.command-slider-vertical::-moz-range-thumb {
+    width: 18px;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    cursor: ns-resize;
+    border: none;
+    border-radius: 2px;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.command-slider-vertical::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+.command-slider-vertical::-moz-range-track {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+.command-allocations-container {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 /* Game Sidebar */
@@ -1340,7 +1539,7 @@ body {
 
 .command-bars-container {
     display: flex;
-    gap: 12px;
+    gap: 80px;
     align-items: flex-end;
     justify-content: center;
 }
@@ -1357,8 +1556,9 @@ body {
     font-size: 10px;
     color: rgba(255, 255, 255, 0.7);
     text-align: center;
-    font-weight: normal;
-    text-transform: none;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
     min-height: 14px;
     display: flex;
     align-items: center;
@@ -1430,10 +1630,10 @@ body {
     padding: 0;
     background: transparent;
     outline: none;
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
-    writing-mode: bt-lr;
-    -webkit-writing-mode: bt-lr;
+    -webkit-appearance: none;
+    appearance: none;
+    writing-mode: vertical-lr;
+    direction: rtl;
     cursor: pointer;
     z-index: 10;
 }
@@ -1463,6 +1663,125 @@ body {
 }
 
 .command-bar-slider::-moz-range-track {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+/* Horizontal command sliders - positioned above planet icons */
+.zone-sliders-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+    pointer-events: auto;
+}
+
+.command-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100px;
+}
+
+.command-slider-label-left,
+.command-slider-label-right {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+    min-width: 35px;
+    text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    white-space: nowrap;
+}
+
+.command-slider-label-left {
+    text-align: right;
+}
+
+.command-slider-label-right {
+    text-align: left;
+}
+
+.command-slider-track-horizontal {
+    position: relative;
+    width: 60px;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.command-slider-fill-horizontal {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.3);
+    transition: width 0.1s ease;
+    border-radius: 4px;
+}
+
+.command-slider-line-horizontal {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.9);
+    z-index: 5;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    transform: translateX(-50%);
+}
+
+.command-slider-horizontal {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.command-slider-horizontal::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    cursor: ew-resize;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.command-slider-horizontal::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    cursor: ew-resize;
+    border: none;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.command-slider-horizontal::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+.command-slider-horizontal::-moz-range-track {
     width: 100%;
     height: 100%;
     background: transparent;
@@ -2386,11 +2705,12 @@ button:disabled {
     to { transform: rotate(360deg); }
 }
 
-/* Time Controls - Top Left (matching probe summary panel style) */
+/* Time Controls - Centered above asteroid belt selector */
 .time-controls {
     position: fixed;
-    top: 20px;
-    left: 10px;
+    bottom: 160px; /* 200px above orbital zone selector (120px height) */
+    left: 50%;
+    transform: translateX(-50%); /* Center horizontally */
     background: rgba(0, 0, 0, 0.3);
     backdrop-filter: blur(5px);
     border-radius: 5px;
@@ -2400,7 +2720,7 @@ button:disabled {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    width: 200px;
+    width: 275px; /* 200px + 75px wider */
     pointer-events: auto;
 }
 
@@ -2497,10 +2817,10 @@ button:disabled {
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    gap: 15px;
+    gap: 0; /* Gap is calculated dynamically in JavaScript */
     height: 100%;
     width: 100%;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* Prevent wrapping - tiles should fit in one row */
 }
 
 .orbital-zone-planet-squares {
@@ -2697,6 +3017,57 @@ button:disabled {
     cursor: pointer;
 }
 
+.transfer-slider-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    margin-top: 8px;
+}
+
+.transfer-slider-container input[type="range"] {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.transfer-slider-container input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #4a9eff;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.transfer-slider-container input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #4a9eff;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.transfer-slider-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.7);
+    padding: 0 4px;
+}
+
+.transfer-slider-labels span {
+    font-family: 'Courier New', monospace;
+}
+
 .transfer-option input[type="number"] {
     width: 100%;
     padding: 8px;
@@ -2743,7 +3114,7 @@ button:disabled {
 }
 
 .orbital-zone-tile {
-    width: 120px;
+    width: 110px; /* Default width, can be overridden by inline style for dynamic spacing */
     height: 100px;
     background: rgba(20, 20, 30, 0.8);
     border: 2px solid rgba(74, 158, 255, 0.3);
@@ -2777,6 +3148,12 @@ button:disabled {
 .orbital-zone-tile.selected.transfer-source {
     border: 3px solid #ffaa00 !important;
     box-shadow: 0 0 20px rgba(255, 170, 0, 1) !important;
+}
+
+.orbital-zone-tile.selected.transfer-destination {
+    border: 3px solid #ff8800 !important;
+    box-shadow: 0 0 20px rgba(255, 136, 0, 1) !important;
+    background: rgba(255, 136, 0, 0.15) !important;
 }
 
 .orbital-zone-tile-label {
@@ -3247,5 +3624,143 @@ button:disabled {
 
 .transfer-action-btn.delete-btn:hover {
     background: rgba(248, 113, 113, 0.4);
+}
+
+/* Performance Panel Styles */
+.performance-panel-container {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.performance-panel {
+    background: rgba(20, 20, 30, 0.95);
+    border: 1px solid rgba(74, 158, 255, 0.3);
+    border-radius: 5px;
+    padding: 15px;
+    min-width: 280px;
+    max-width: 350px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+    pointer-events: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.performance-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(74, 158, 255, 0.2);
+}
+
+.performance-panel-header h3 {
+    margin: 0;
+    font-size: 14px;
+    color: #4a9eff;
+    font-weight: bold;
+}
+
+.performance-panel-close {
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    transition: background 0.2s;
+}
+
+.performance-panel-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.performance-panel-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.performance-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.performance-subsection {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 8px;
+    border-left: 2px solid rgba(74, 158, 255, 0.2);
+}
+
+.subsection-title {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
+    text-transform: uppercase;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.performance-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.metric-label {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 11px;
+}
+
+.metric-value {
+    font-weight: bold;
+    font-size: 11px;
+    color: #4a9eff;
+    font-family: 'Courier New', monospace;
+}
+
+.metric-value.metric-good {
+    color: #4caf50;
+}
+
+.metric-value.metric-warning {
+    color: #ff9800;
+}
+
+.metric-value.metric-critical {
+    color: #f44336;
+}
+
+.performance-warning {
+    padding: 6px 8px;
+    margin: 4px 0;
+    border-radius: 3px;
+    font-size: 10px;
+    border-left: 3px solid;
+}
+
+.performance-warning.warning-normal {
+    background: rgba(255, 152, 0, 0.1);
+    border-color: #ff9800;
+    color: #ff9800;
+}
+
+.performance-warning.warning-critical {
+    background: rgba(244, 67, 54, 0.1);
+    border-color: #f44336;
+    color: #f44336;
 }
 

@@ -203,4 +203,6 @@ class GameDataLoader {
 
 // Global instance
 const gameDataLoader = new GameDataLoader();
+// Make it available globally for Probe class
+window.gameDataLoader = gameDataLoader;
 

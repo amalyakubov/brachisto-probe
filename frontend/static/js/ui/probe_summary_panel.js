@@ -21,16 +21,16 @@ class ProbeSummaryPanel {
 
     formatNumber(value) {
         if (value === 0) return '0';
-        // Use scientific notation for large numbers
-        if (value >= 1e6) {
+        // Use scientific notation for numbers >= 10
+        if (value >= 10) {
             return value.toExponential(2);
         }
-        // Use float notation for small numbers
+        // Use float notation for numbers < 1
         if (value < 1 && value > 0) {
-            return value.toFixed(2);
+            return value.toFixed(4);
         }
-        // Regular notation
-        return value.toFixed(1);
+        // Regular notation for 1 <= value < 10
+        return value.toFixed(2);
     }
 
     formatNumberWithCommas(value) {
@@ -70,15 +70,37 @@ class ProbeSummaryPanel {
             html += '<div class="probe-summary-value" id="probe-summary-doubling">—</div>';
             html += '</div>';
 
-            // Allocations section
+            // Dexterity Breakdown (merged from metrics panel)
             html += '<div class="probe-summary-item">';
-            html += '<div class="probe-summary-label">Allocations</div>';
-            html += '<div class="probe-summary-breakdown" id="probe-summary-allocations">';
-            html += '<div class="probe-summary-breakdown-item">None</div>';
+            html += '<div class="probe-summary-label">Dexterity Breakdown</div>';
+            html += '<div class="probe-summary-breakdown" id="probe-summary-dexterity">';
+            html += '<div class="probe-summary-breakdown-item">';
+            html += '<span class="probe-summary-breakdown-label">Dyson:</span>';
+            html += '<span class="probe-summary-breakdown-value" id="probe-dex-dyson-rate">0 kg/s</span>';
+            html += '<span class="probe-summary-breakdown-count" id="probe-dex-dyson-count">0</span>';
+            html += '</div>';
+            html += '<div class="probe-summary-breakdown-item">';
+            html += '<span class="probe-summary-breakdown-label">Mining:</span>';
+            html += '<span class="probe-summary-breakdown-value" id="probe-dex-mining-rate">0 kg/s</span>';
+            html += '<span class="probe-summary-breakdown-count" id="probe-dex-mining-count">0</span>';
+            html += '</div>';
+            html += '<div class="probe-summary-breakdown-item">';
+            html += '<span class="probe-summary-breakdown-label">Probes:</span>';
+            html += '<span class="probe-summary-breakdown-value" id="probe-dex-probes-rate">0 kg/s</span>';
+            html += '<span class="probe-summary-breakdown-count" id="probe-dex-probes-count">0</span>';
+            html += '</div>';
+            html += '<div class="probe-summary-breakdown-item">';
+            html += '<span class="probe-summary-breakdown-label">Structures:</span>';
+            html += '<span class="probe-summary-breakdown-value" id="probe-dex-structures-rate">0 kg/s</span>';
+            html += '<span class="probe-summary-breakdown-count" id="probe-dex-structures-count">0</span>';
+            html += '</div>';
             html += '</div>';
             html += '</div>';
 
-            html += '</div>';
+            html += '</div>'; // Close probe-summary-panel
+            
+            // Zone Controls section (rendered by CommandPanel)
+            // The command-panel-content div is already in the container, CommandPanel will render into it
 
             this.container.innerHTML = html;
         } catch (error) {
@@ -186,69 +208,99 @@ class ProbeSummaryPanel {
             }
         }
 
-        // Allocations breakdown - use zone-based allocations
-        const allocationsEl = document.getElementById('probe-summary-allocations');
-        if (allocationsEl) {
-            let allocationsHtml = '';
+        // Dexterity Breakdown (merged from metrics panel)
+        const allocations = gameState.probe_allocations || {};
+        const allocationsByZone = gameState.probe_allocations_by_zone || {};
+        const breakdown = gameState.resource_breakdowns?.dexterity;
+        
+        // Get research multiplier
+        const roboticBonus = breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0;
+        const totalMultiplier = 1.0 + (roboticBonus || 0);
+        
+        // Helper function to calculate dexterity
+        const calculateDexterityForProbes = (probes, baseDexterity, multiplier = 1.0) => {
+            return probes * baseDexterity * multiplier;
+        };
+        
+        // Sum allocations across all zones
+        let totalDysonProbes = 0;
+        let totalDysonDexterity = 0;
+        let totalMiningProbes = 0;
+        let totalMiningDexterity = 0;
+        let totalProbeConstructProbes = 0;
+        let totalProbeConstructDexterity = 0;
+        let totalStructureProbes = 0;
+        let totalStructureDexterity = 0;
+        
+        // Legacy allocations
+        totalDysonProbes += (allocations.dyson?.probe || 0) + (allocations.dyson?.construction_probe || 0);
+        totalDysonDexterity += calculateDexterityForProbes(
+            (allocations.dyson?.probe || 0), 1.0, totalMultiplier
+        ) + calculateDexterityForProbes(
+            (allocations.dyson?.construction_probe || 0), 1.8, totalMultiplier
+        );
+        
+        totalMiningProbes += (allocations.harvest?.probe || 0) + (allocations.harvest?.miner_probe || 0);
+        totalMiningDexterity += calculateDexterityForProbes(
+            (allocations.harvest?.probe || 0), 1.0, totalMultiplier
+        ) + calculateDexterityForProbes(
+            (allocations.harvest?.miner_probe || 0), 1.5, totalMultiplier
+        );
+        
+        totalProbeConstructProbes += (allocations.construct?.probe || 0) + (allocations.construct?.construction_probe || 0);
+        totalProbeConstructDexterity += calculateDexterityForProbes(
+            (allocations.construct?.probe || 0), 1.0, totalMultiplier
+        ) + calculateDexterityForProbes(
+            (allocations.construct?.construction_probe || 0), 1.8, totalMultiplier
+        );
+        
+        // Zone-based allocations
+        for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
+            totalDysonProbes += Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
+            totalDysonDexterity += calculateDexterityForProbes(
+                (zoneAllocs.dyson?.probe || 0), 1.0, totalMultiplier
+            ) + calculateDexterityForProbes(
+                (zoneAllocs.dyson?.construction_probe || 0), 1.8, totalMultiplier
+            );
             
-            // Get allocations from game state
-            const allocations = gameState.probe_allocations || {};
-            const allocationsByZone = gameState.probe_allocations_by_zone || {};
+            totalMiningProbes += Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
+            totalMiningDexterity += calculateDexterityForProbes(
+                (zoneAllocs.harvest?.probe || 0), 1.0, totalMultiplier
+            ) + calculateDexterityForProbes(
+                (zoneAllocs.harvest?.miner_probe || 0), 1.5, totalMultiplier
+            );
             
-            // Sum up allocations across all zones
-            let totalDyson = 0;
-            let totalReplicate = 0;
-            let totalConstruct = 0;
-            let totalHarvest = 0;
-            
-            // Legacy allocations (for backward compatibility)
-            totalDyson += Object.values(allocations.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
-            totalHarvest += Object.values(allocations.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
-            totalConstruct += Object.values(allocations.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
-            
-            // Zone-based allocations
-            for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
-                totalDyson += Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
-                totalHarvest += Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
-                totalReplicate += Object.values(zoneAllocs.replicate || {}).reduce((sum, count) => sum + (count || 0), 0);
-                totalConstruct += Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
-            }
-            
-            if (totalDyson > 0) {
-                allocationsHtml += `<div class="probe-summary-breakdown-item">
-                    <span class="probe-summary-breakdown-label">Dyson:</span>
-                    <span class="probe-summary-breakdown-value">${this.formatNumberWithCommas(Math.floor(totalDyson))}</span>
-                </div>`;
-            }
-            
-            if (totalReplicate > 0) {
-                allocationsHtml += `<div class="probe-summary-breakdown-item">
-                    <span class="probe-summary-breakdown-label">Replicate:</span>
-                    <span class="probe-summary-breakdown-value">${this.formatNumberWithCommas(Math.floor(totalReplicate))}</span>
-                </div>`;
-            }
-            
-            if (totalConstruct > 0) {
-                allocationsHtml += `<div class="probe-summary-breakdown-item">
-                    <span class="probe-summary-breakdown-label">Construct:</span>
-                    <span class="probe-summary-breakdown-value">${this.formatNumberWithCommas(Math.floor(totalConstruct))}</span>
-                </div>`;
-            }
-            
-            if (totalHarvest > 0) {
-                allocationsHtml += `<div class="probe-summary-breakdown-item">
-                    <span class="probe-summary-breakdown-label">Harvest:</span>
-                    <span class="probe-summary-breakdown-value">${this.formatNumberWithCommas(Math.floor(totalHarvest))}</span>
-                </div>`;
-            }
-
-            // Show "None" if no allocations
-            if (allocationsHtml === '') {
-                allocationsHtml = '<div class="probe-summary-breakdown-item">None</div>';
-            }
-
-            allocationsEl.innerHTML = allocationsHtml;
+            totalProbeConstructProbes += Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
+            totalProbeConstructDexterity += calculateDexterityForProbes(
+                (zoneAllocs.construct?.probe || 0), 1.0, totalMultiplier
+            ) + calculateDexterityForProbes(
+                (zoneAllocs.construct?.construction_probe || 0), 1.8, totalMultiplier
+            );
         }
+        
+        // Update Dyson dexterity
+        const dysonRateEl = document.getElementById('probe-dex-dyson-rate');
+        const dysonCountEl = document.getElementById('probe-dex-dyson-count');
+        if (dysonRateEl) dysonRateEl.textContent = `${this.formatNumber(totalDysonDexterity)} kg/s`;
+        if (dysonCountEl) dysonCountEl.textContent = `${this.formatNumberWithCommas(Math.floor(totalDysonProbes))}`;
+
+        // Update Mining dexterity
+        const miningRateEl = document.getElementById('probe-dex-mining-rate');
+        const miningCountEl = document.getElementById('probe-dex-mining-count');
+        if (miningRateEl) miningRateEl.textContent = `${this.formatNumber(totalMiningDexterity)} kg/s`;
+        if (miningCountEl) miningCountEl.textContent = `${this.formatNumberWithCommas(Math.floor(totalMiningProbes))}`;
+
+        // Update Probe construction dexterity
+        const probeConstructRateEl = document.getElementById('probe-dex-probes-rate');
+        const probeCountEl = document.getElementById('probe-dex-probes-count');
+        if (probeConstructRateEl) probeConstructRateEl.textContent = `${this.formatNumber(totalProbeConstructDexterity)} kg/s`;
+        if (probeCountEl) probeCountEl.textContent = `${this.formatNumberWithCommas(Math.floor(totalProbeConstructProbes))}`;
+
+        // Update Structure construction dexterity
+        const structureRateEl = document.getElementById('probe-dex-structures-rate');
+        const structureCountEl = document.getElementById('probe-dex-structures-count');
+        if (structureRateEl) structureRateEl.textContent = `${this.formatNumber(totalStructureDexterity)} kg/s`;
+        if (structureCountEl) structureCountEl.textContent = `${this.formatNumberWithCommas(Math.floor(totalStructureProbes))}`;
     }
 }
 

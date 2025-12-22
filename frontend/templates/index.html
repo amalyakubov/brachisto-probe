@@ -32,11 +32,10 @@
             <div id="metrics-panel" class="metrics-panel-container"></div>
             <!-- Left Side Probe Summary Panel -->
             <div id="probe-summary-panel" class="probe-summary-panel-container"></div>
-        </div>
-        
-        <!-- Command Panel - Separate Column -->
-        <div id="command-panel-column" class="command-panel-column">
-            <div id="command-panel-content"></div>
+            <!-- Command Panel - Center Left (separate window) -->
+            <div id="command-panel-column" class="command-panel-column">
+                <div id="command-panel-content"></div>
+            </div>
         </div>
         
         <!-- Right Sidebar with Tabs -->
@@ -68,6 +67,9 @@
         
         <!-- Bottom Left: Time Display and Speed Controls -->
         <div id="time-controls" class="time-controls"></div>
+        
+        <!-- Performance Panel (toggleable with F key) -->
+        <div id="performance-panel" class="performance-panel-container"></div>
         
         <!-- Bottom: Scripting Window (collapsible, collapsed by default) - Hidden for now -->
         <div id="scripting-window" class="scripting-window collapsed" style="display: none;">
@@ -127,6 +129,8 @@
     
     <!-- Game Scripts -->
     <script src="/static/js/api.js"></script>
+    <script src="/static/js/utils/performance_profiler.js"></script>
+    <script src="/static/js/utils/calculation_cache.js"></script>
     <script src="/static/js/game/config.js"></script>
     <script src="/static/js/game/data_loader.js"></script>
     <script src="/static/js/game/storage.js"></script>
@@ -155,6 +159,7 @@
     <script src="/static/js/ui/scripting_window.js"></script>
     <script src="/static/js/ui/leaderboard.js"></script>
     <script src="/static/js/ui/time_controls.js"></script>
+    <script src="/static/js/ui/performance_panel.js"></script>
     <script src="/static/js/main.js"></script>
 </body>
 </html>

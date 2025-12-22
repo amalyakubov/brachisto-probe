@@ -35,12 +35,14 @@ class App {
                 console.error('Failed to initialize ResourceDisplay:', e);
             }
 
-            // Initialize metrics panel
+            // Metrics panel merged into probe summary panel - hide the metrics panel container
             try {
-                this.metricsPanel = typeof MetricsPanel !== 'undefined' ? 
-                    new MetricsPanel('metrics-panel') : null;
+                const metricsContainer = document.getElementById('metrics-panel');
+                if (metricsContainer) {
+                    metricsContainer.style.display = 'none';
+                }
             } catch (e) {
-                console.error('Failed to initialize MetricsPanel:', e);
+                console.error('Failed to hide MetricsPanel:', e);
             }
 
             // Initialize probe summary panel
@@ -136,6 +138,14 @@ class App {
             } catch (e) {
                 console.error('Failed to initialize CommandPanel:', e);
             }
+            
+            // Initialize performance panel
+            try {
+                this.performancePanel = typeof PerformancePanel !== 'undefined' ? 
+                    new PerformancePanel('performance-panel') : null;
+            } catch (e) {
+                console.error('Failed to initialize PerformancePanel:', e);
+            }
 
             try {
                 const productionTab = sidebar ? sidebar.getTabContainer('production') : document.getElementById('tab-production');
@@ -176,6 +186,10 @@ class App {
             try {
                 this.orbitalZoneSelector = typeof OrbitalZoneSelector !== 'undefined' ? 
                     new OrbitalZoneSelector('orbital-zone-selector') : null;
+                // Expose globally for access from other components
+                if (this.orbitalZoneSelector) {
+                    window.orbitalZoneSelector = this.orbitalZoneSelector;
+                }
             } catch (e) {
                 console.error('Failed to initialize OrbitalZoneSelector:', e);
             }
@@ -250,13 +264,8 @@ class App {
             const activeElement = document.activeElement;
             const isInputFocused = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
             
-            // Pause/Resume: Spacebar
-            if (e.key === ' ' && !isInputFocused) {
-                e.preventDefault();
-                if (this.timeControls) {
-                    this.timeControls.togglePause();
-                }
-            }
+            // Spacebar is now used for transfer workflow (handled in orbital_zone_selector.js)
+            // Pause/Resume functionality removed from spacebar
             
             // Leaderboard: 'L' key
             if (e.key.toLowerCase() === 'l' && !e.ctrlKey && !e.metaKey && !isInputFocused) {
@@ -331,8 +340,15 @@ class App {
                 if (loadingText) loadingText.textContent = 'Initializing game engine...';
             }
             
-            if (typeof gameEngine === 'undefined') {
-                throw new Error('Game engine not loaded');
+            // Wait for gameEngine to be available (in case scripts are still loading)
+            let attempts = 0;
+            while ((typeof window.gameEngine === 'undefined') && attempts < 50) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                attempts++;
+            }
+            
+            if (typeof window.gameEngine === 'undefined') {
+                throw new Error('Game engine not loaded - ensure engine.js is loaded before main.js');
             }
             
             // Optionally create backend session for saving/leaderboards (non-blocking)
@@ -349,7 +365,7 @@ class App {
             }
             
             // Start local game engine
-            await gameEngine.start(sessionId || 'local', {});
+            await window.gameEngine.start(sessionId || 'local', {});
             
             // Update loading message
             if (loadingScreen) {
@@ -363,7 +379,7 @@ class App {
             }
             
             // Display initial game state
-            const initialState = gameEngine.getGameState();
+            const initialState = window.gameEngine.getGameState();
             if (initialState) {
                 this.onGameStateUpdate(initialState);
             }
@@ -385,6 +401,10 @@ class App {
     }
 
     onGameStateUpdate(gameState) {
+        // Start profiling UI update
+        const profiler = window.performanceProfiler;
+        const uiUpdateStart = profiler ? profiler.startTiming('ui_update') : null;
+        
         // Update all UI components
         if (this.resourceDisplay) {
             this.resourceDisplay.update(gameState);
@@ -426,9 +446,7 @@ class App {
             const factoryProduction = gameState.factory_production || {};
             this.structuresViz.updateStructures(gameState, probeAllocations, factoryProduction);
         }
-        if (this.metricsPanel) {
-            this.metricsPanel.update(gameState);
-        }
+        // Metrics panel merged into probe summary panel - no longer needed
         if (this.probeSummaryPanel) {
             this.probeSummaryPanel.update(gameState);
             
@@ -449,13 +467,18 @@ class App {
         if (gameState.dyson_sphere_progress >= 1.0) {
             this.onGameComplete();
         }
+        
+        // End profiling UI update
+        if (profiler && uiUpdateStart !== null) {
+            profiler.endTiming('ui_update', uiUpdateStart);
+        }
     }
 
     // updateDysonProgress removed - Dyson progress is displayed in resource display panel
 
     async onGameComplete() {
         // Show completion message
-        const gameState = gameEngine.getGameState();
+        const gameState = window.gameEngine.getGameState();
         const time = gameState.time || 0;
         const metal = gameState.zone_metal_remaining ? 
             Object.values(gameState.zone_metal_remaining).reduce((a, b) => a + b, 0) : 0;
@@ -466,7 +489,7 @@ class App {
         try {
             await api.request('/api/game/complete', {
                 method: 'POST',
-                body: JSON.stringify({ session_id: gameEngine.sessionId })
+                body: JSON.stringify({ session_id: window.gameEngine.sessionId })
             });
             // Refresh leaderboard if available
             if (this.leaderboard) {
@@ -501,7 +524,7 @@ class App {
         const baseDeltaTime = 0.016; // ~60fps base
         
         // Get time speed from game engine to make planets move faster
-        const timeSpeed = (typeof gameEngine !== 'undefined' && gameEngine.timeSpeed) ? gameEngine.timeSpeed : 1;
+        const timeSpeed = (typeof window.gameEngine !== 'undefined' && window.gameEngine.timeSpeed) ? window.gameEngine.timeSpeed : 1;
         const deltaTime = baseDeltaTime * timeSpeed;
 
         // Update starfield with camera position

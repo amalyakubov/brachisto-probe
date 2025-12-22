@@ -1,3 +1,85 @@
+/** Static Probe class for accessing probe properties */
+class Probe {
+    /**
+     * Get probe data by type
+     * @param {string} probeType - The probe type ID (e.g., 'probe', 'miner_probe')
+     * @returns {Object|null} Probe data object or null if not found
+     */
+    static getData(probeType) {
+        if (!window.gameDataLoader) {
+            // Silently return null - default values will be used by getProperty
+            return null;
+        }
+        const probes = window.gameDataLoader.getProbes();
+        for (const probe of probes) {
+            if (probe.id === probeType) {
+                return probe;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Get a specific property from probe data
+     * @param {string} probeType - The probe type ID
+     * @param {string} property - The property name (e.g., 'base_cost_metal', 'base_dexterity')
+     * @param {*} defaultValue - Default value if property not found
+     * @returns {*} The property value or defaultValue
+     */
+    static getProperty(probeType, property, defaultValue = null) {
+        const probeData = Probe.getData(probeType);
+        if (!probeData) {
+            return defaultValue;
+        }
+        return probeData[property] !== undefined ? probeData[property] : defaultValue;
+    }
+    
+    /**
+     * Get base cost metal for a probe type
+     * @param {string} probeType - The probe type ID
+     * @returns {number} Metal cost per probe
+     */
+    static getMetalCost(probeType) {
+        return Probe.getProperty(probeType, 'base_cost_metal', Config.PROBE_MASS);
+    }
+    
+    /**
+     * Get base dexterity for a probe type
+     * @param {string} probeType - The probe type ID
+     * @returns {number} Base dexterity value
+     */
+    static getBaseDexterity(probeType) {
+        return Probe.getProperty(probeType, 'base_dexterity', 1.0);
+    }
+    
+    /**
+     * Get base energy cost for a probe type
+     * @param {string} probeType - The probe type ID
+     * @returns {number} Energy cost per probe
+     */
+    static getEnergyCost(probeType) {
+        return Probe.getProperty(probeType, 'base_cost_energy', 0);
+    }
+    
+    /**
+     * Get effects for a probe type
+     * @param {string} probeType - The probe type ID
+     * @returns {Object} Effects object or empty object
+     */
+    static getEffects(probeType) {
+        return Probe.getProperty(probeType, 'effects', {});
+    }
+    
+    /**
+     * Get prerequisites for a probe type
+     * @param {string} probeType - The probe type ID
+     * @returns {Array} Prerequisites array or empty array
+     */
+    static getPrerequisites(probeType) {
+        return Probe.getProperty(probeType, 'prerequisites', []);
+    }
+}
+
 /** Core game engine for simulation - JavaScript port */
 class GameEngine {
     constructor(sessionId, config = {}) {
@@ -12,7 +94,9 @@ class GameEngine {
         // Resources
         this.energy = config.initial_energy !== undefined ? config.initial_energy : Config.INITIAL_ENERGY;
         this.metal = config.initial_metal !== undefined ? config.initial_metal : Config.INITIAL_METAL;
-        this.intelligence = 0.0;
+        // Intelligence/FLOPS is a production rate, not accumulated storage
+        // We keep this for display purposes only (shows current rate, not accumulated)
+        this.intelligence = 0.0; // Will be updated to show current production rate for UI
         this.dexterity = 0.0; // Will be calculated after probes are initialized
         this.slag = 0.0;
         
@@ -60,7 +144,7 @@ class GameEngine {
         this.buildAllocation = 100; // Default: 0% structures, 100% probes
         
         // Dyson power allocation: 0 = all economy (energy), 100 = all compute (intelligence)
-        this.dysonPowerAllocation = 0; // Default: 0% compute, 100% economy
+        this.dysonPowerAllocation = 50; // Default: 50% compute power
         
         // Harvest zone selection (which zone to harvest from)
         this.harvestZone = 'earth'; // Default to Earth
@@ -83,6 +167,7 @@ class GameEngine {
         // Zone-specific policies: {zoneId: {mining_slider, replication_slider, construction_slider}}
         // For Dyson zone: {construct_slider}
         this.zonePolicies = {};
+        
         
         // Minimum probe threshold per zone: {zoneId: minimum_count}
         this.zoneMinProbes = {};
@@ -107,7 +192,8 @@ class GameEngine {
         // Enabled construction: set of building_ids that are enabled for continuous construction
         this.enabledConstruction = new Set();
         
-        // Active transfers: [{id, from, to, rate, energy_cost_per_second, paused}]
+        // Active transfers: [{id, from, to, rate, type, paused, ...}]
+        // Note: Transfers don't consume energy - probes use their own propulsion drives
         this.activeTransfers = [];
         
         // Transfer history: all transfers (completed and active)
@@ -147,22 +233,16 @@ class GameEngine {
             
             // Initialize zone policies
             if (isDysonZone) {
-                this.zonePolicies[zoneId] = {construct_slider: 50}; // Default: 50% construct, 50% replicate
+                // dyson_allocation_slider: 0 = all Build (bottom label), 100 = all Dyson (top label)
+                // This way the variable matches the label: higher value = more of what's labeled at top
+                this.zonePolicies[zoneId] = {dyson_allocation_slider: 100, replication_slider: 100}; // Default: 100 = all Dyson (top label), 100% replicate
             } else {
-                if (zoneId === 'earth') {
-                    // Earth default: 100% build (0% mine), 100% replicate (0% construct)
-                    this.zonePolicies[zoneId] = {
-                        mining_slider: 0,  // 0 = all build, 100 = all mine
-                        replication_slider: 100,  // 0 = all construct, 100 = all replicate
-                        construction_slider: 0
-                    };
-                } else {
-                    this.zonePolicies[zoneId] = {
-                        mining_slider: 50,
-                        replication_slider: 50,
-                        construction_slider: 50
-                    };
-                }
+                // All regular zones: 50% harvest, 50% build, 50% replicate, 50% structure
+                this.zonePolicies[zoneId] = {
+                    mining_slider: 50,  // 50% harvest, 50% build (0 = all harvest, 100 = all build)
+                    replication_slider: 100,  // 100% replicate, 0% construct (structure)
+                    construction_slider: 50  // Legacy compatibility
+                };
             }
             
             // Initialize minimum probe threshold
@@ -173,21 +253,6 @@ class GameEngine {
                 this.probesByZone[zoneId] = {
                     'probe': 0
                 };
-            }
-            
-            // Dyson zone starts with 10 probes and 1 mobile factory
-            if (isDysonZone) {
-                const initialProbes = this.config.initial_probes !== undefined ? this.config.initial_probes : 10;
-                this.probesByZone[zoneId] = {
-                    'probe': initialProbes
-                };
-                // Add mobile factory to Dyson zone
-                if (!this.structuresByZone[zoneId]) {
-                    this.structuresByZone[zoneId] = {};
-                }
-                this.structuresByZone[zoneId]['mobile_factory'] = 1;
-                // Also add to legacy global structures
-                this.structures['mobile_factory'] = 1;
             }
             
             // Initialize probe allocations by zone - single probe type only
@@ -211,24 +276,29 @@ class GameEngine {
                 this.structuresByZone[zoneId] = {};
             }
             
-            // Mercury starts with 1 solar array (orbital array)
-            if (zoneId === 'mercury') {
-                if (!this.structuresByZone[zoneId]) {
-                    this.structuresByZone[zoneId] = {};
-                }
-                this.structuresByZone[zoneId]['solar_array_basic'] = 1;
-                // Also add to legacy global structures
-                this.structures['solar_array_basic'] = 1;
+            // Dyson sphere (sun) starts with 1 probe
+            if (zoneId === 'dyson_sphere') {
+                this.probesByZone[zoneId] = {
+                    'probe': 1
+                };
             }
             
-            // Asteroid belt starts with 1 mining station
-            if (zoneId === 'asteroid_belt') {
+            // Earth starts with 1 probe, 10 solar arrays, 1 mining station, 1 refinery
+            if (zoneId === 'earth') {
+                const initialProbes = this.config.initial_probes !== undefined ? this.config.initial_probes : 1;
+                this.probesByZone[zoneId] = {
+                    'probe': initialProbes
+                };
                 if (!this.structuresByZone[zoneId]) {
                     this.structuresByZone[zoneId] = {};
                 }
+                this.structuresByZone[zoneId]['solar_array_basic'] = 10;
                 this.structuresByZone[zoneId]['basic_mining_station'] = 1;
+                this.structuresByZone[zoneId]['refinery'] = 1;
                 // Also add to legacy global structures
+                this.structures['solar_array_basic'] = 5;
                 this.structures['basic_mining_station'] = 1;
+                this.structures['refinery'] = 1;
             }
         }
         
@@ -256,7 +326,8 @@ class GameEngine {
             engine.time = state.time || 0.0;
             engine.energy = state.energy !== undefined ? state.energy : Config.INITIAL_ENERGY;
             engine.metal = state.metal !== undefined ? state.metal : Config.INITIAL_METAL;
-            engine.intelligence = state.intelligence || 0.0;
+            // Intelligence is not persisted - it's a production rate, not accumulated storage
+            engine.intelligence = 0.0; // Will be recalculated from current production
             engine.slag = state.slag || 0.0;
             
             // Load probes by zone (new system)
@@ -458,7 +529,7 @@ class GameEngine {
             'time': this.time,
             'energy': this.energy,
             'metal': this.metal,
-            'intelligence': this.intelligence,
+            'intelligence': this.intelligence, // Current production rate (for display), not accumulated
             'dexterity': this.dexterity,
             'slag': this.slag,
             'probes': this._calculateTotalProbes(), // Calculate total probes across all zones
@@ -515,9 +586,22 @@ class GameEngine {
     }
     
     tick(deltaTime) {
+        // Start profiling tick time
+        const profiler = window.performanceProfiler;
+        const tickStartTime = profiler ? profiler.startTiming('tick') : null;
+        
+        // Clear cache invalidated flags at start of tick
+        const cache = window.calculationCache;
+        if (cache) {
+            cache.clearInvalidated();
+        }
+        
         // Ensure deltaTime is valid
         if (!deltaTime || deltaTime <= 0 || isNaN(deltaTime) || !isFinite(deltaTime)) {
             console.warn('Invalid deltaTime in tick:', deltaTime);
+            if (profiler && tickStartTime !== null) {
+                profiler.endTiming('tick', tickStartTime);
+            }
             return;
         }
         
@@ -538,11 +622,25 @@ class GameEngine {
         }
         
         // Calculate base production and consumption rates (before energy throttling)
+        const zoneCalcStart = profiler ? profiler.startTiming('zone_calculation') : null;
         const energyProduction = this._calculateEnergyProduction();
         const [baseMetalRate, zoneMetalDepletion, baseSlagRate, zoneSlagDepletion] = this._calculateMetalProduction();
+        if (profiler && zoneCalcStart !== null) {
+            profiler.endTiming('zone_calculation', zoneCalcStart);
+        }
+        
+        const probeCalcStart = profiler ? profiler.startTiming('probe_calculation') : null;
         const [baseProbeRate, idleProbesBuild, factoryMetalCostPerProbe] = this._calculateProbeProduction();
+        if (profiler && probeCalcStart !== null) {
+            profiler.endTiming('probe_calculation', probeCalcStart);
+        }
+        
+        const structureCalcStart = profiler ? profiler.startTiming('structure_calculation') : null;
         const theoreticalIntelligenceRate = this._calculateIntelligenceProduction();
         const baseDysonConstructionRate = this._calculateDysonConstructionRate();
+        if (profiler && structureCalcStart !== null) {
+            profiler.endTiming('structure_calculation', structureCalcStart);
+        }
         
         // Calculate energy consumption breakdown (mining vs build)
         const energyConsumptionBreakdown = this._calculateEnergyConsumptionBreakdown();
@@ -560,8 +658,12 @@ class GameEngine {
         // Calculate effective intelligence production based on available energy
         const availableEnergyForCompute = Math.max(0, totalEnergyAvailable - nonComputeEnergyConsumption);
         
-        // Calculate effective compute (limited by energy)
+        // Calculate effective compute production rate (limited by energy)
+        // Intelligence/FLOPS is a production rate, not an accumulated resource
         const intelligenceRate = this._calculateEffectiveIntelligenceProduction(availableEnergyForCompute);
+        
+        // Store current production rate for UI display (not accumulated storage)
+        this.intelligence = intelligenceRate;
         
         // Compute energy consumption is based on effective compute
         let computeEnergyConsumption = 0.0;
@@ -718,16 +820,18 @@ class GameEngine {
         this.isMetalLimited = isMetalLimited;
         
         // Apply zone metal and slag depletion (throttled by miningEnergyThrottle)
-        for (const [zoneId, metalDepletionAmount] of Object.entries(zoneMetalDepletion)) {
-            if (zoneId in this.zoneMetalRemaining) {
-                this.zoneMetalRemaining[zoneId] -= metalDepletionAmount * miningEnergyThrottle * deltaTime;
-                this.zoneMetalRemaining[zoneId] = Math.max(0, this.zoneMetalRemaining[zoneId]);
-            }
+        // Cache zone lookup for efficiency
+        const zones = this.dataLoader.orbitalZones || [];
+        const zoneCache = {};
+        for (const zone of zones) {
+            zoneCache[zone.id] = zone;
         }
-        // Update zone mass remaining and produce slag from mining
+        
+        // Update zone metal remaining, mass remaining, and produce slag from mining (single pass)
         for (const [zoneId, metalDepletionAmount] of Object.entries(zoneMetalDepletion)) {
             if (zoneId in this.zoneMetalRemaining && zoneId in this.zoneMassRemaining) {
                 const actualDepletion = metalDepletionAmount * miningEnergyThrottle * deltaTime;
+                
                 // Reduce metal remaining
                 this.zoneMetalRemaining[zoneId] -= actualDepletion;
                 this.zoneMetalRemaining[zoneId] = Math.max(0, this.zoneMetalRemaining[zoneId]);
@@ -737,8 +841,7 @@ class GameEngine {
                 this.zoneMassRemaining[zoneId] = Math.max(0, this.zoneMassRemaining[zoneId]);
                 
                 // Produce slag proportional to mass mined (non-metal portion)
-                const zones = this.dataLoader.orbitalZones || [];
-                const zone = zones.find(z => z.id === zoneId);
+                const zone = zoneCache[zoneId];
                 if (zone) {
                     const metalPercentage = zone.metal_percentage || 0.32;
                     const slagProduced = actualDepletion * (1.0 - metalPercentage) / metalPercentage;
@@ -784,7 +887,7 @@ class GameEngine {
                 const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
                 if (constructingProbes > 0) {
                     const zonePolicy = this.zonePolicies[zoneId] || {};
-                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 100;
                     const replicateFraction = replicationSlider / 100.0; // Fraction going to replicate (0 = all construct, 100 = all replicate)
                     totalReplicatingProbes += constructingProbes * replicateFraction;
                 }
@@ -856,19 +959,23 @@ class GameEngine {
                 this.metal = Math.max(0, this.metal);
                 
                 // Check if we've completed a probe
+                // Use division instead of while loop to avoid potential blocking
                 let probesBuiltThisTick = 0;
-                while (this.probeConstructionProgress[progressKey] >= metalCostPerProbe) {
-                    // Add probe to global count (legacy)
-                    this.probes[probeType] = (this.probes[probeType] || 0) + 1;
+                if (this.probeConstructionProgress[progressKey] >= metalCostPerProbe) {
+                    probesBuiltThisTick = Math.floor(this.probeConstructionProgress[progressKey] / metalCostPerProbe);
+                    const remainder = this.probeConstructionProgress[progressKey] % metalCostPerProbe;
                     
-                    // Add probe to the zone where the factory is located
+                    // Add probes to global count (legacy)
+                    this.probes[probeType] = (this.probes[probeType] || 0) + probesBuiltThisTick;
+                    
+                    // Add probes to the zone where the factory is located
                     if (!(zoneId in this.probesByZone)) {
                         this.probesByZone[zoneId] = {'probe': 0};
                     }
-                    this.probesByZone[zoneId]['probe'] = (this.probesByZone[zoneId]['probe'] || 0) + 1;
+                    const currentProbes = Math.floor(this.probesByZone[zoneId]['probe'] || 0);
+                    this.probesByZone[zoneId]['probe'] = currentProbes + Math.floor(probesBuiltThisTick);
                     
-                    this.probeConstructionProgress[progressKey] -= metalCostPerProbe;
-                    probesBuiltThisTick += 1;
+                    this.probeConstructionProgress[progressKey] = remainder;
                 }
                 
                 if (probesBuiltThisTick > 0) {
@@ -885,11 +992,7 @@ class GameEngine {
         if (manualProbeBuildRateKgS > 0) {
             // Default to building 'probe' type
             const probeType = 'probe';
-            const probeData = this._getProbeData(probeType);
-            let metalCostPerProbe = Config.PROBE_MASS;
-            if (probeData) {
-                metalCostPerProbe = probeData.base_cost_metal || Config.PROBE_MASS;
-            }
+                    const metalCostPerProbe = Probe.getMetalCost(probeType);
             
             let progressThisTick = manualProbeBuildRateKgS * deltaTime;
             
@@ -906,11 +1009,15 @@ class GameEngine {
             this.metal -= progressThisTick;
             this.metal = Math.max(0, this.metal);
             
-            // Check if we've completed a probe
+            // Check if we've completed probes
+            // Use division instead of while loop to avoid potential blocking
             let probesBuiltThisTick = 0;
-            while (this.probeConstructionProgress[probeType] >= metalCostPerProbe) {
-                // Add probe to global count (legacy)
-                this.probes[probeType] = (this.probes[probeType] || 0) + 1;
+            if (this.probeConstructionProgress[probeType] >= metalCostPerProbe) {
+                probesBuiltThisTick = Math.floor(this.probeConstructionProgress[probeType] / metalCostPerProbe);
+                const remainder = this.probeConstructionProgress[probeType] % metalCostPerProbe;
+                
+                // Add probes to global count (legacy)
+                this.probes[probeType] = (this.probes[probeType] || 0) + probesBuiltThisTick;
                 
                 // Distribute new probes to zones proportionally based on replicate allocation
                 // Find zones with replicating probes and distribute proportionally
@@ -925,56 +1032,66 @@ class GameEngine {
                     }
                 }
                 
-                // If we have zone allocations, distribute proportionally using weighted random
+                // Distribute probes proportionally across zones
                 if (totalReplicateAllocation > 0) {
-                    // Use cumulative probability to distribute proportionally
-                    let random = Math.random() * totalReplicateAllocation;
+                    // Calculate cumulative weights for proportional distribution
+                    const cumulativeWeights = [];
                     let cumulative = 0;
-                    let selectedZone = null;
-                    
                     for (const [zoneId, count] of Object.entries(zoneReplicateAllocations)) {
                         cumulative += count;
-                        if (random <= cumulative) {
-                            selectedZone = zoneId;
-                            break;
-                        }
+                        cumulativeWeights.push({zoneId, cumulative});
                     }
                     
-                    // Fallback to zone with most replicating probes if selection failed
-                    if (!selectedZone) {
-                        let maxZone = null;
-                        let maxCount = 0;
-                        for (const [zoneId, count] of Object.entries(zoneReplicateAllocations)) {
-                            if (count > maxCount) {
-                                maxCount = count;
-                                maxZone = zoneId;
+                    // Distribute each probe proportionally
+                    for (let i = 0; i < probesBuiltThisTick; i++) {
+                        const random = Math.random() * totalReplicateAllocation;
+                        let selectedZone = null;
+                        
+                        for (const {zoneId, cumulative} of cumulativeWeights) {
+                            if (random <= cumulative) {
+                                selectedZone = zoneId;
+                                break;
                             }
                         }
-                        selectedZone = maxZone || this.defaultZone;
-                    }
-                    
-                    if (selectedZone) {
-                        if (!(selectedZone in this.probesByZone)) {
-                            this.probesByZone[selectedZone] = {'probe': 0};
+                        
+                        // Fallback to zone with most replicating probes if selection failed
+                        if (!selectedZone) {
+                            let maxZone = null;
+                            let maxCount = 0;
+                            for (const [zoneId, count] of Object.entries(zoneReplicateAllocations)) {
+                                if (count > maxCount) {
+                                    maxCount = count;
+                                    maxZone = zoneId;
+                                }
+                            }
+                            selectedZone = maxZone || this.defaultZone;
                         }
-                        this.probesByZone[selectedZone]['probe'] = (this.probesByZone[selectedZone]['probe'] || 0) + 1;
-                    } else {
-                        // Fallback to default zone
-                        if (!(this.defaultZone in this.probesByZone)) {
-                            this.probesByZone[this.defaultZone] = {'probe': 0};
+                        
+                        if (selectedZone) {
+                            if (!(selectedZone in this.probesByZone)) {
+                                this.probesByZone[selectedZone] = {'probe': 0};
+                            }
+                            const currentProbes = Math.floor(this.probesByZone[selectedZone]['probe'] || 0);
+                            this.probesByZone[selectedZone]['probe'] = currentProbes + 1;
+                        } else {
+                            // Fallback to default zone
+                            if (!(this.defaultZone in this.probesByZone)) {
+                                this.probesByZone[this.defaultZone] = {'probe': 0};
+                            }
+                            const currentProbes = Math.floor(this.probesByZone[this.defaultZone]['probe'] || 0);
+                            this.probesByZone[this.defaultZone]['probe'] = currentProbes + 1;
                         }
-                        this.probesByZone[this.defaultZone]['probe'] = (this.probesByZone[this.defaultZone]['probe'] || 0) + 1;
                     }
                 } else {
-                    // No zone allocations, add to default zone
+                    // No zone allocations, add all to default zone
                     if (!(this.defaultZone in this.probesByZone)) {
                         this.probesByZone[this.defaultZone] = {'probe': 0};
                     }
-                    this.probesByZone[this.defaultZone]['probe'] = (this.probesByZone[this.defaultZone]['probe'] || 0) + 1;
+                    const currentProbes = Math.floor(this.probesByZone[this.defaultZone]['probe'] || 0);
+                    this.probesByZone[this.defaultZone]['probe'] = currentProbes + Math.floor(probesBuiltThisTick);
                 }
                 
-                this.probeConstructionProgress[probeType] -= metalCostPerProbe;
-                probesBuiltThisTick += 1;
+                this.probeConstructionProgress[probeType] = remainder;
             }
             
             if (probesBuiltThisTick > 0) {
@@ -983,31 +1100,39 @@ class GameEngine {
         }
         
         // Structure building (probes building structures using 0.1 kg/s per probe)
-        // Calculate total constructing probes across all zones
-        let totalConstructingProbes = 0;
+        // Calculate structure-building probes per zone based on zone-specific replication_slider
+        // For each zone, construct allocation is split between structures and replicate based on replication_slider
+        // replication_slider: 0 = all structures, 100 = all replicate
+        // So structure fraction = 1.0 - (replication_slider / 100.0)
+        let totalStructureBuildingProbes = 0;
+        const structureBuildingProbesByZone = {};
+        
         if (this.probeAllocationsByZone) {
             for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
                 if (zoneAllocations && zoneAllocations.construct) {
                     const constructAllocation = zoneAllocations.construct || {};
-                    totalConstructingProbes += Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+                    const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+                    
+                    if (constructingProbes > 0) {
+                        // Get zone policy to determine structure vs replicate split
+                        const zonePolicy = this.zonePolicies[zoneId] || {};
+                        const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 100;
+                        const structureFraction = 1.0 - (replicationSlider / 100.0); // 0 = all replicate, 100 = all structures
+                        
+                        const zoneStructureBuildingProbes = constructingProbes * structureFraction;
+                        structureBuildingProbesByZone[zoneId] = zoneStructureBuildingProbes;
+                        totalStructureBuildingProbes += zoneStructureBuildingProbes;
+                    }
                 }
             }
         }
         
-        const structureBuildingFraction = 1.0 - (this.buildAllocation / 100.0);
-        const structureBuildingProbes = totalConstructingProbes * structureBuildingFraction;
-        
-        if (structureBuildingProbes > 0 && this.enabledConstruction.size > 0) {
-            // Base build rate: 0.1 kg/s per probe
-            const baseStructureBuildRateKgS = structureBuildingProbes * Config.PROBE_BUILD_RATE;
-            // Structure construction uses buildEnergyThrottle and otherMetalThrottle
-            const structureBuildRateKgS = baseStructureBuildRateKgS * buildEnergyThrottle * otherMetalThrottle;
-            
+        if (totalStructureBuildingProbes > 0 && this.enabledConstruction.size > 0) {
             // Get enabled buildings that are in progress or need to be started
-            // enabledConstruction keys are in format: "zoneId_buildingId"
+            // enabledConstruction keys are in format: "zoneId::buildingId" (using :: to handle underscores in both)
             const enabledBuildings = [];
             for (const enabledKey of this.enabledConstruction) {
-                const [zoneId, buildingId] = enabledKey.split('_', 2);
+                const [zoneId, buildingId] = enabledKey.split('::', 2);
                 if (!zoneId || !buildingId) continue;
                 
                 const building = this.dataLoader.getBuildingById(buildingId);
@@ -1022,6 +1147,7 @@ class GameEngine {
                 
                 // Get current progress (0 if not started)
                 const progress = this.structureConstructionProgress[enabledKey] || 0.0;
+                
                 enabledBuildings.push({
                     'enabled_key': enabledKey,
                     'zone_id': zoneId,
@@ -1033,59 +1159,93 @@ class GameEngine {
             }
             
             if (enabledBuildings.length > 0) {
-                // Divide production pool equally across all enabled buildings
-                const numEnabled = enabledBuildings.length;
-                const buildRatePerBuilding = structureBuildRateKgS / numEnabled;
-                
-                // Build all enabled buildings simultaneously
+                // Allocate build power per zone based on structure-building probes in that zone
+                // Group enabled buildings by zone
+                const buildingsByZone = {};
                 for (const buildingInfo of enabledBuildings) {
-                    const enabledKey = buildingInfo.enabled_key;
                     const zoneId = buildingInfo.zone_id;
-                    const buildingId = buildingInfo.building_id;
-                    const building = buildingInfo.building;
-                    const costMetal = buildingInfo.cost_metal;
-                    const progress = buildingInfo.progress;
+                    if (!(zoneId in buildingsByZone)) {
+                        buildingsByZone[zoneId] = [];
+                    }
+                    buildingsByZone[zoneId].push(buildingInfo);
+                }
+                
+                // Calculate build rate per zone and distribute to buildings in that zone
+                for (const [zoneId, zoneBuildings] of Object.entries(buildingsByZone)) {
+                    const zoneStructureBuildingProbes = structureBuildingProbesByZone[zoneId] || 0;
+                    if (zoneStructureBuildingProbes <= 0) {
+                        continue;
+                    }
                     
-                    const remainingToBuild = costMetal - progress;
-                    if (remainingToBuild > 0) {
-                        let progressThisTick = Math.min(buildRatePerBuilding * deltaTime, remainingToBuild);
+                    // Base build rate: 0.1 kg/s per probe
+                    const baseZoneBuildRateKgS = zoneStructureBuildingProbes * Config.PROBE_BUILD_RATE;
+                    
+                    // Structure construction uses buildEnergyThrottle and otherMetalThrottle
+                    const zoneBuildRateKgS = baseZoneBuildRateKgS * buildEnergyThrottle * otherMetalThrottle;
+                    
+                    // Note: In Dyson zone, probes allocated to "construct" only build structures (not Dyson)
+                    // Dyson construction uses probes allocated to "dyson" activity (calculated separately)
+                    
+                    // Allocate build power equally to all enabled buildings in this zone
+                    const numEnabledInZone = zoneBuildings.length;
+                    const buildRatePerBuilding = zoneBuildRateKgS / numEnabledInZone;
+                    
+                    // Build all enabled buildings in this zone simultaneously
+                    for (const buildingInfo of zoneBuildings) {
+                        const enabledKey = buildingInfo.enabled_key;
+                        const buildingZoneId = buildingInfo.zone_id;
+                        const buildingId = buildingInfo.building_id;
+                        const building = buildingInfo.building;
+                        const costMetal = buildingInfo.cost_metal;
+                        const progress = buildingInfo.progress;
                         
-                        // Check if we have enough metal
-                        if (this.metal < progressThisTick) {
-                            progressThisTick = this.metal;
-                        }
-                        
-                        if (progressThisTick > 0) {
-                            if (!(enabledKey in this.structureConstructionProgress)) {
-                                this.structureConstructionProgress[enabledKey] = 0.0;
-                            }
-                            this.structureConstructionProgress[enabledKey] += progressThisTick;
-                            this.metal -= progressThisTick;
-                            this.metal = Math.max(0, this.metal);
+                        const remainingToBuild = costMetal - progress;
+                        if (remainingToBuild > 0) {
+                            let progressThisTick = Math.min(buildRatePerBuilding * deltaTime, remainingToBuild);
                             
-                            // Check if structure is complete
-                            if (this.structureConstructionProgress[enabledKey] >= costMetal) {
-                                // Complete the structure - add to zone
-                                if (!(zoneId in this.structuresByZone)) {
-                                    this.structuresByZone[zoneId] = {};
-                                }
-                                if (!(buildingId in this.structuresByZone[zoneId])) {
-                                    this.structuresByZone[zoneId][buildingId] = 0;
-                                }
-                                this.structuresByZone[zoneId][buildingId] += 1;
-                                
-                                // Legacy: also update global structure count
-                                if (!(buildingId in this.structures)) {
-                                    this.structures[buildingId] = 0;
-                                }
-                                this.structures[buildingId] += 1;
-                                
-                                // If still enabled, start next one immediately
-                                if (this.enabledConstruction.has(enabledKey)) {
+                            // Check if we have enough metal
+                            if (this.metal < progressThisTick) {
+                                progressThisTick = this.metal;
+                            }
+                            
+                            if (progressThisTick > 0) {
+                                if (!(enabledKey in this.structureConstructionProgress)) {
                                     this.structureConstructionProgress[enabledKey] = 0.0;
-                                } else {
-                                    // Not enabled anymore, remove from progress
-                                    delete this.structureConstructionProgress[enabledKey];
+                                }
+                                this.structureConstructionProgress[enabledKey] += progressThisTick;
+                                this.metal -= progressThisTick;
+                                this.metal = Math.max(0, this.metal);
+                                
+                                // Check if structure is complete
+                                if (this.structureConstructionProgress[enabledKey] >= costMetal) {
+                                    // Complete the structure - add to zone
+                                    if (!(buildingZoneId in this.structuresByZone)) {
+                                        this.structuresByZone[buildingZoneId] = {};
+                                    }
+                                    if (!(buildingId in this.structuresByZone[buildingZoneId])) {
+                                        this.structuresByZone[buildingZoneId][buildingId] = 0;
+                                    }
+                                    this.structuresByZone[buildingZoneId][buildingId] += 1;
+                                    
+                                    // Legacy: also update global structure count
+                                    if (!(buildingId in this.structures)) {
+                                        this.structures[buildingId] = 0;
+                                    }
+                                    this.structures[buildingId] += 1;
+                                    
+                                    // Invalidate structure cache
+                                    const cache = window.calculationCache;
+                                    if (cache) {
+                                        cache.invalidateStructures();
+                                    }
+                                    
+                                    // If still enabled, start next one immediately
+                                    if (this.enabledConstruction.has(enabledKey)) {
+                                        this.structureConstructionProgress[enabledKey] = 0.0;
+                                    } else {
+                                        // Not enabled anymore, remove from progress
+                                        delete this.structureConstructionProgress[enabledKey];
+                                    }
                                 }
                             }
                         }
@@ -1096,7 +1256,7 @@ class GameEngine {
             // Clean up invalid structures from progress
             const structuresToRemove = [];
             for (const enabledKey of Object.keys(this.structureConstructionProgress)) {
-                const [zoneId, buildingId] = enabledKey.split('_', 2);
+                const [zoneId, buildingId] = enabledKey.split('::', 2);
                 if (!zoneId || !buildingId) {
                     structuresToRemove.push(enabledKey);
                     continue;
@@ -1127,13 +1287,33 @@ class GameEngine {
             }
         }
         
-        this.intelligence += intelligenceRate * deltaTime;
+        // Intelligence/FLOPS is a production rate, not an accumulated resource
+        // We don't store it - it's consumed directly by research projects
         
         // Recalculate dexterity
         this.dexterity = this._calculateDexterity();
         
-        // Update Dyson sphere construction (with energy throttling and metal checks)
-        this._updateDysonSphereConstruction(deltaTime, dysonConstructionRate);
+        // Update Dyson sphere construction (using probes allocated to "dyson" activity)
+        // Get probes allocated to Dyson construction from zone activities
+        const dysonZoneId = 'dyson_sphere';
+        let dysonConstructionRateKgS = 0.0;
+        
+        // Calculate zone activities to get Dyson probe allocation
+        const zoneActivities = this._calculateZoneActivities();
+        const dysonProbes = zoneActivities[dysonZoneId]?.dyson || 0;
+        
+        if (dysonProbes > 0) {
+            // Base rate: 0.1 kg/s per probe
+            const baseDysonRate = dysonProbes * Config.PROBE_BUILD_RATE;
+            // Apply throttling (use same throttles as structure building)
+            dysonConstructionRateKgS = baseDysonRate * buildEnergyThrottle * otherMetalThrottle;
+            
+            // Apply research bonuses
+            const researchBonus = this._getResearchBonus('dyson_swarm_construction', 'dyson_construction_rate_multiplier', 1.0);
+            dysonConstructionRateKgS *= researchBonus;
+        }
+        
+        this._updateDysonSphereConstruction(deltaTime, dysonConstructionRateKgS);
         
         // Update probe counts from transfers (ingoing and outgoing)
         this._updateZoneProbeCounts(deltaTime);
@@ -1184,9 +1364,9 @@ class GameEngine {
                 // Just check if they've arrived
                 if (transfer.arrivalTime && transfer.arrivalTime <= currentTime) {
                     // All probes have arrived - add them to destination
-                    const probesToAdd = transfer.totalCount || transfer.count || 0;
+                    const probesToAdd = Math.floor(transfer.totalCount || transfer.count || 0);
                     if (probesToAdd > 0) {
-                        const currentTo = this.probesByZone[transfer.to].probe || 0;
+                        const currentTo = Math.floor(this.probesByZone[transfer.to].probe || 0);
                         this.probesByZone[transfer.to].probe = currentTo + probesToAdd;
                     }
                     // Transfer complete - remove it
@@ -1213,54 +1393,24 @@ class GameEngine {
                 
                 // Add arriving probes to destination zone
                 if (totalArriving > 0) {
-                    const currentTo = this.probesByZone[transfer.to].probe || 0;
-                    this.probesByZone[transfer.to].probe = currentTo + totalArriving;
+                    const currentTo = Math.floor(this.probesByZone[transfer.to].probe || 0);
+                    const totalArrivingInt = Math.floor(totalArriving);
+                    this.probesByZone[transfer.to].probe = currentTo + totalArrivingInt;
                 }
                 
-                // Calculate probe production rate in source zone
-                // This includes: factory production + replication production in that zone
-                let sourceZoneProductionRate = 0.0;
+                // Constantly recalculate transfer rate based on current net probe increase rate
+                // This ensures the transfer rate scales with production increases
+                // Use the helper function to calculate zone-specific production rate
+                const sourceZoneNetIncreaseRate = this._calculateZoneProbeProductionRate(transfer.from);
                 
-                // Factory production in source zone
-                if (this.factoryProductionByZone && this.factoryProductionByZone[transfer.from]) {
-                    sourceZoneProductionRate += this.factoryProductionByZone[transfer.from].rate || 0;
-                }
-                
-                // Replication production in source zone
-                // Calculate replication rate for this specific zone
-                const zoneAllocations = this.probeAllocationsByZone[transfer.from] || {};
-                const replicateAllocation = zoneAllocations.replicate || {};
-                let replicatingProbesInZone = Object.values(replicateAllocation).reduce((a, b) => a + b, 0);
-                
-                // Also check construct allocations that are set to replicate
-                const constructAllocation = zoneAllocations.construct || {};
-                const constructingProbesInZone = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
-                if (constructingProbesInZone > 0) {
-                    const zonePolicy = this.zonePolicies[transfer.from] || {};
-                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
-                    const replicateFraction = replicationSlider / 100.0;
-                    replicatingProbesInZone += constructingProbesInZone * replicateFraction;
-                }
-                
-                // Calculate replication rate (probes building other probes)
-                const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
-                const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
-                const replicationRate = replicatingProbesInZone * effectiveBuildRate;
-                
-                // Get metal cost per probe for replication
-                const probeData = this._getProbeData('probe');
-                let metalCostPerProbe = Config.PROBE_MASS;
-                if (probeData) {
-                    metalCostPerProbe = probeData.base_cost_metal || Config.PROBE_MASS;
-                }
-                
-                // Convert replication rate from kg/s to probes/s
-                const replicationProbesPerSecond = replicationRate / metalCostPerProbe;
-                sourceZoneProductionRate += replicationProbesPerSecond;
-                
-                // Calculate sending rate as percentage of production (stored in ratePercentage)
+                // Calculate sending rate as percentage of net increase rate (stored in ratePercentage)
                 const ratePercentage = transfer.ratePercentage || 0;
-                const actualSendingRate = (sourceZoneProductionRate * ratePercentage) / 100.0; // probes per second
+                const actualSendingRate = (sourceZoneNetIncreaseRate * ratePercentage) / 100.0; // probes per second
+                
+                // Update the transfer rate to reflect current production
+                transfer.rate = actualSendingRate;
+                
+                // Transfers don't consume energy - probes use their own propulsion drives
                 
                 // Calculate probes to send this tick
                 const probesToSendThisTick = actualSendingRate * deltaTime;
@@ -1269,17 +1419,19 @@ class GameEngine {
                 const availableProbes = this.probesByZone[transfer.from].probe || 0;
                 
                 if (probesToSendThisTick > 0 && availableProbes > 0) {
-                    // Limit to available probes
-                    const probesToSend = Math.min(probesToSendThisTick, availableProbes);
+                    // Limit to available probes and ensure integer
+                    const probesToSend = Math.floor(Math.min(probesToSendThisTick, availableProbes));
                     
-                    // Remove probes from source immediately
-                    const currentFrom = this.probesByZone[transfer.from].probe || 0;
+                    // Remove probes from source immediately (ensure integer)
+                    const currentFrom = Math.floor(this.probesByZone[transfer.from].probe || 0);
                     this.probesByZone[transfer.from].probe = Math.max(0, currentFrom - probesToSend);
                     
                     // Add to transit queue - they'll arrive after transferTime
-                    const arrivalTime = currentTime + (transfer.transferTime || 3000);
+                    const transferTime = transfer.transferTime || 3000;
+                    const arrivalTime = currentTime + transferTime;
                     transfer.inTransit.push({
                         count: probesToSend,
+                        departureTime: currentTime,
                         arrivalTime: arrivalTime
                     });
                 }
@@ -1293,8 +1445,17 @@ class GameEngine {
         // All energy comes from Dyson sphere (energy probes removed)
         
         // Dyson sphere power allocation
-        const dysonPowerAllocation = this.dysonPowerAllocation || 0; // 0 = all economy, 100 = all compute
-        const economyFraction = (100 - dysonPowerAllocation) / 100.0; // Fraction going to economy/energy
+        // Slider 0-50%: linear from 100% economy to 0% economy (0% compute to 100% compute nominal)
+        // Slider 50-100%: 0% economy (100% compute nominal + overclocking)
+        const computePowerSlider = this.dysonPowerAllocation || 0;
+        let economyFraction = 1.0;
+        if (computePowerSlider <= 50) {
+            // 0-50%: linear from 100% economy to 0% economy
+            economyFraction = (50 - computePowerSlider) / 50.0;
+        } else {
+            // Above 50%: 0% economy (all goes to compute, including overclocking)
+            economyFraction = 0.0;
+        }
         
         if (this.dysonSphereMass >= this.dysonSphereTargetMass) {
             // Complete Dyson sphere: all star's power
@@ -1339,8 +1500,6 @@ class GameEngine {
         return rate;
     }
     _calculateEnergyConsumption() {
-        const baseProbeConsumption = Config.PROBE_ENERGY_CONSUMPTION; // 100kW per probe
-        
         // Get research bonuses first
         const computerReduction = this._getResearchBonus('computer_systems', 'probe_energy_cost_reduction', 0.0);
         const propulsionReduction = this._getResearchBonus('propulsion_systems', 'dexterity_energy_cost_reduction', 0.0);
@@ -1348,21 +1507,20 @@ class GameEngine {
         
         let consumption = 0.0;
         
-        // Probe energy consumption (in watts) - single probe type only
-        const probeCount = this.probes.probe || 0;
-        let probeBaseConsumption = probeCount * baseProbeConsumption;
+        // Probe base energy consumption removed - probes only consume energy when actively:
+        // - Harvesting (mining)
+        // - Building (constructing structures/probes)
+        // - Constructing Dyson sphere
         
-        // Apply computer systems reduction to probe base consumption
-        probeBaseConsumption *= (1.0 - computerReduction);
-        consumption += probeBaseConsumption;
-        
-        // Structure energy consumption
-        for (const [buildingId, count] of Object.entries(this.structures)) {
-            const building = this.dataLoader.getBuildingById(buildingId);
-            if (building) {
-                const effects = building.effects || {};
-                const energyCost = effects.energy_consumption_per_second || 0;
-                consumption += energyCost * count;
+        // Structure energy consumption - iterate through zones
+        for (const [zoneId, structures] of Object.entries(this.structuresByZone)) {
+            for (const [buildingId, count] of Object.entries(structures)) {
+                const building = this.dataLoader.getBuildingById(buildingId);
+                if (building) {
+                    const effects = building.effects || {};
+                    const energyCost = effects.energy_consumption_per_second || 0;
+                    consumption += energyCost * count;
+                }
             }
         }
         
@@ -1435,7 +1593,6 @@ class GameEngine {
         // Returns breakdown of energy consumption: {mining: W, build: W, total: W}
         // Mining includes: harvest activities
         // Build includes: probe replication, structure construction, Dyson construction
-        const baseProbeConsumption = Config.PROBE_ENERGY_CONSUMPTION; // 100kW per probe
         
         // Get research bonuses
         const computerReduction = this._getResearchBonus('computer_systems', 'probe_energy_cost_reduction', 0.0);
@@ -1445,28 +1602,10 @@ class GameEngine {
         let miningConsumption = 0.0;
         let buildConsumption = 0.0;
         
-        // Probe energy consumption (base - applies to all probes)
-        const probeConsumptionRates = {
-            'probe': baseProbeConsumption,
-            'miner_probe': baseProbeConsumption * 0.8,
-            'compute_probe': baseProbeConsumption * 1.5,
-            'energy_probe': -baseProbeConsumption * 0.2, // Negative = generates energy
-            'construction_probe': baseProbeConsumption * 1.2
-        };
-        
-        // Probe energy consumption - iterate through zones
-        let probeBaseConsumption = 0.0;
-        for (const [zoneId, probes] of Object.entries(this.probesByZone)) {
-            for (const [probeType, count] of Object.entries(probes)) {
-                if (probeType in probeConsumptionRates) {
-                    probeBaseConsumption += count * probeConsumptionRates[probeType];
-                }
-            }
-        }
-        
-        probeBaseConsumption *= (1.0 - computerReduction);
-        // Base probe consumption is split proportionally between mining and build based on allocations
-        // For now, we'll count it as part of both, but prioritize mining when throttling
+        // Probe base energy consumption removed - probes only consume energy when actively:
+        // - Harvesting (mining)
+        // - Building (constructing structures/probes)
+        // - Constructing Dyson sphere
         
         // Structure energy consumption - iterate through zones (counts as build)
         for (const [zoneId, structures] of Object.entries(this.structuresByZone)) {
@@ -1539,19 +1678,8 @@ class GameEngine {
         const dysonConstructionEnergyCost = dysonConstructionRate * 250000;
         buildConsumption += dysonConstructionEnergyCost;
         
-        // Add base probe consumption proportionally (split between mining and build)
-        // For throttling purposes, we prioritize mining, so we'll add it to both but mining gets priority
-        const totalActivityConsumption = miningConsumption + buildConsumption;
-        if (totalActivityConsumption > 0) {
-            const miningFraction = miningConsumption / totalActivityConsumption;
-            const buildFraction = buildConsumption / totalActivityConsumption;
-            miningConsumption += probeBaseConsumption * miningFraction;
-            buildConsumption += probeBaseConsumption * buildFraction;
-        } else {
-            // If no activity, still need to account for base probe consumption
-            // Split evenly or assign to build (since probes need energy even when idle)
-            buildConsumption += probeBaseConsumption;
-        }
+        // No base probe consumption - probes only consume energy when actively working
+        // (harvesting, building, or constructing Dyson)
         
         // Apply production efficiency bonus
         if (productionEfficiencyBonus > 1.0) {
@@ -1607,15 +1735,9 @@ class GameEngine {
             // Calculate mining from probes in this zone
             for (const [probeType, count] of Object.entries(harvestAllocation)) {
                 if (count > 0.001) { // Small threshold to handle floating point
-                    const probeData = this._getProbeData(probeType);
-                    let baseDexterity = 1.0;
-                    let harvestMultiplier = 1.0;
-                    
-                    if (probeData) {
-                        baseDexterity = probeData.base_dexterity || 1.0;
-                        const effects = probeData.effects || {};
-                        harvestMultiplier = effects.harvest_efficiency_multiplier || 1.0;
-                    }
+                    const baseDexterity = Probe.getBaseDexterity(probeType);
+                    const effects = Probe.getEffects(probeType);
+                    const harvestMultiplier = effects.harvest_efficiency_multiplier || 1.0;
                     
                     // Base harvest rate per probe (kg/s total material)
                     let baseHarvestRate = Config.PROBE_HARVEST_RATE; // 1.0 kg/s per probe
@@ -1792,7 +1914,7 @@ class GameEngine {
                 const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
                 if (constructingProbes > 0) {
                     const zonePolicy = this.zonePolicies[zoneId] || {};
-                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 100;
                     const replicateFraction = replicationSlider / 100.0; // Fraction going to replicate (0 = all construct, 100 = all replicate)
                     totalReplicatingProbes += constructingProbes * replicateFraction;
                 }
@@ -1850,28 +1972,160 @@ class GameEngine {
         return [rates, idleProbes, factoryMetalCostPerProbe];
     }
     _calculateIntelligenceProduction() {
-        // Dyson power allocation: 0 = all economy, 100 = all compute
-        const dysonPowerAllocation = this.dysonPowerAllocation || 0;
-        const computeFraction = dysonPowerAllocation / 100.0; // Fraction going to compute
+        // Calculate nominal compute fraction based on slider
+        // Slider 0-50%: linear from 0% to 100% compute (nominal)
+        // Slider 50-100%: 100% compute (nominal) - overclocking handled in _calculateEffectiveIntelligenceProduction
+        const computePowerSlider = this.dysonPowerAllocation || 0;
+        let nominalComputeFraction = 0.0;
+        if (computePowerSlider <= 50) {
+            // 0-50%: linear from 0% to 100%
+            nominalComputeFraction = computePowerSlider / 50.0;
+        } else {
+            // Above 50%: always 100% nominal (overclocking adds extra)
+            nominalComputeFraction = 1.0;
+        }
         
+        let totalIntelligenceFlops = 0.0;
+        
+        // Dyson sphere compute (at 100% nominal = slider at 50%)
+        const fullComputeFraction = 1.0; // Calculate as if at 100% nominal
         if (this.dysonSphereMass >= this.dysonSphereTargetMass) {
             // Complete Dyson sphere: all star's power
             const sunTotalPower = 3.8e26; // watts
-            // Allocate based on slider and convert to compute: 1 W = 1e9 FLOPS/s
-            const computePower = sunTotalPower * computeFraction;
-            return computePower * 1e9; // FLOPS/s
+            // Calculate full compute, then apply nominal fraction
+            const computePower = sunTotalPower * fullComputeFraction;
+            totalIntelligenceFlops += computePower * 1e9 * nominalComputeFraction; // FLOPS/s
         } else {
             // While building: convert Dyson sphere power generation to compute
             const dysonPower = this.dysonSphereMass * 5000; // 5000W = 5 kW per kg
-            const computePower = dysonPower * computeFraction;
+            const computePower = dysonPower * fullComputeFraction;
             // Conversion: 1 W = 1e9 FLOPS/s
-            return computePower * 1e9; // FLOPS/s
+            totalIntelligenceFlops += computePower * 1e9 * nominalComputeFraction; // FLOPS/s
         }
+        
+        // Add compute from orbital data centers and other structures
+        // Check zone-based structures (new system)
+        for (const [zoneId, zoneStructures] of Object.entries(this.structuresByZone)) {
+            for (const [buildingId, count] of Object.entries(zoneStructures)) {
+                const building = this.dataLoader.getBuildingById(buildingId);
+                if (building) {
+                    const effects = building.effects || {};
+                    const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                    if (intelligenceOutputFlops > 0) {
+                        totalIntelligenceFlops += intelligenceOutputFlops * count;
+                    } else {
+                        // Legacy: convert from intelligence_per_second
+                        const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
+                        totalIntelligenceFlops += intelligenceOutput * 1e12 * count;
+                    }
+                }
+            }
+        }
+        
+        // Also check legacy global structures for backward compatibility
+        for (const [buildingId, count] of Object.entries(this.structures)) {
+            // Skip if already counted in zone structures
+            let alreadyCounted = false;
+            for (const zoneStructures of Object.values(this.structuresByZone)) {
+                if (zoneStructures[buildingId]) {
+                    alreadyCounted = true;
+                    break;
+                }
+            }
+            if (alreadyCounted) continue;
+            
+            const building = this.dataLoader.getBuildingById(buildingId);
+            if (building) {
+                const effects = building.effects || {};
+                const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                if (intelligenceOutputFlops > 0) {
+                    totalIntelligenceFlops += intelligenceOutputFlops * count;
+                } else {
+                    // Legacy: convert from intelligence_per_second
+                    const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
+                    totalIntelligenceFlops += intelligenceOutput * 1e12 * count;
+                }
+            }
+        }
+        
+        return totalIntelligenceFlops;
     }
     
     _calculateEffectiveIntelligenceProduction(availableEnergyForCompute) {
-        // Theoretical maximum compute from Dyson sphere (already accounts for slider allocation)
-        const theoreticalMax = this._calculateIntelligenceProduction();
+        // Get the compute power slider value (0-100)
+        const computePowerSlider = this.dysonPowerAllocation || 0;
+        
+        // Calculate nominal compute (at 50% slider = 100% of dyson power)
+        // Slider 0-50%: linear from 0% to 100% of dyson power
+        // Slider 50%: 100% of dyson power (nominal)
+        let nominalComputeFraction = 0.0;
+        if (computePowerSlider <= 50) {
+            // 0-50%: linear from 0% to 100%
+            nominalComputeFraction = computePowerSlider / 50.0;
+        } else {
+            // Above 50%: always 100% nominal
+            nominalComputeFraction = 1.0;
+        }
+        
+        // Calculate theoretical maximum compute from Dyson sphere at 100% nominal (slider at 50%)
+        const fullComputeFraction = 1.0; // 100% of dyson power to compute
+        
+        let theoreticalMax = 0.0;
+        if (this.dysonSphereMass >= this.dysonSphereTargetMass) {
+            // Complete Dyson sphere: all star's power
+            const sunTotalPower = 3.8e26; // watts
+            const computePower = sunTotalPower * fullComputeFraction;
+            theoreticalMax = computePower * 1e9; // FLOPS/s
+        } else {
+            // While building: convert Dyson sphere power generation to compute
+            const dysonPower = this.dysonSphereMass * 5000; // 5000W = 5 kW per kg
+            const computePower = dysonPower * fullComputeFraction;
+            theoreticalMax = computePower * 1e9; // FLOPS/s
+        }
+        
+        // Apply nominal fraction
+        theoreticalMax *= nominalComputeFraction;
+        
+        // Add compute from orbital data centers
+        for (const [zoneId, zoneStructures] of Object.entries(this.structuresByZone)) {
+            for (const [buildingId, count] of Object.entries(zoneStructures)) {
+                const building = this.dataLoader.getBuildingById(buildingId);
+                if (building) {
+                    const effects = building.effects || {};
+                    const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                    if (intelligenceOutputFlops > 0) {
+                        theoreticalMax += intelligenceOutputFlops * count;
+                    } else {
+                        const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
+                        theoreticalMax += intelligenceOutput * 1e12 * count;
+                    }
+                }
+            }
+        }
+        
+        // Also check legacy global structures
+        for (const [buildingId, count] of Object.entries(this.structures)) {
+            let alreadyCounted = false;
+            for (const zoneStructures of Object.values(this.structuresByZone)) {
+                if (zoneStructures[buildingId]) {
+                    alreadyCounted = true;
+                    break;
+                }
+            }
+            if (alreadyCounted) continue;
+            
+            const building = this.dataLoader.getBuildingById(buildingId);
+            if (building) {
+                const effects = building.effects || {};
+                const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                if (intelligenceOutputFlops > 0) {
+                    theoreticalMax += intelligenceOutputFlops * count;
+                } else {
+                    const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
+                    theoreticalMax += intelligenceOutput * 1e12 * count;
+                }
+            }
+        }
         
         // If no theoretical compute, return 0
         if (theoreticalMax <= 0) {
@@ -1887,12 +2141,92 @@ class GameEngine {
         // Efficiency > 1.0 means less power needed, so more FLOPS per watt
         const powerPerFlops = computeEfficiency > 0 ? basePowerPerFlops / computeEfficiency : basePowerPerFlops;
         
-        // Calculate compute available from energy
+        // Calculate compute available from energy (nominal allocation)
         const computeFromEnergy = availableEnergyForCompute / powerPerFlops;
         
-        // Effective production is minimum of theoretical max (from slider) and energy-limited
-        return Math.min(theoreticalMax, computeFromEnergy);
+        // Base effective production is minimum of theoretical max and energy-limited
+        let effectiveProduction = Math.min(theoreticalMax, computeFromEnergy);
+        
+        // Overclocking: if slider > 50%, add excess energy with log declining returns
+        if (computePowerSlider > 50 && availableEnergyForCompute > 0) {
+            // Calculate excess energy percentage: (slider - 50) * 2, capped at 100%
+            const excessEnergyPercent = Math.min(100, (computePowerSlider - 50) * 2) / 100.0;
+            
+            // Find total energy available (need to get this from tick context)
+            // For now, use availableEnergyForCompute as excess energy pool
+            // In practice, this should be calculated from total energy minus all other consumption
+            const excessEnergyPool = availableEnergyForCompute; // This is already excess after other consumption
+            
+            // Calculate excess energy to use
+            const excessEnergyToUse = excessEnergyPool * excessEnergyPercent;
+            
+            // Convert excess energy to compute with logarithmic declining returns
+            // Log returns: efficiency = 1 / (1 + excess_ratio)
+            const excessComputeFromEnergy = excessEnergyToUse / powerPerFlops;
+            const excessRatio = excessComputeFromEnergy / Math.max(1, theoreticalMax);
+            const overclockEfficiency = 1.0 / (1.0 + excessRatio);
+            const overclockCompute = excessComputeFromEnergy * overclockEfficiency;
+            
+            // Add overclock compute to effective production
+            effectiveProduction += overclockCompute;
+        }
+        
+        return effectiveProduction;
     }
+    _calculateZoneActivities() {
+        /**Calculate probe activities per zone based on zone policies.
+        
+        Returns: {zoneId: {'harvest': count, 'replicate': count, 'construct': count, 'dyson': count}}
+        */
+        const activities = {};
+        const zones = this.dataLoader.orbitalZones || [];
+        
+        for (const zone of zones) {
+            const zoneId = zone.id;
+            const zoneProbes = this.probesByZone[zoneId]?.probe || 0;
+            const policy = this.zonePolicies[zoneId] || {};
+            
+            if (zone.is_dyson_zone) {
+                // Dyson zone: Three sliders
+                // 1. Dyson build slider: splits between Dyson construction and other (build/replicate)
+                const dysonBuildSlider = (policy.dyson_build_slider !== undefined ? policy.dyson_build_slider : 90) / 100.0;
+                const dysonBuildCount = zoneProbes * dysonBuildSlider;
+                const otherCount = zoneProbes * (1.0 - dysonBuildSlider);
+                
+                // 2. Replication slider: splits "other" between structures and replicate
+                const replicationSlider = (policy.replication_slider !== undefined ? policy.replication_slider : 100) / 100.0;
+                const replicateCount = otherCount * replicationSlider;
+                const constructCount = otherCount * (1.0 - replicationSlider);
+                
+                activities[zoneId] = {
+                    'construct': constructCount,  // Building structures
+                    'replicate': replicateCount,
+                    'harvest': 0,
+                    'dyson': dysonBuildCount  // Building Dyson
+                };
+            } else {
+                // Regular zones: mining vs replication/construction
+                const miningSlider = (policy.mining_slider !== undefined ? policy.mining_slider : 50) / 100.0;
+                const replicationSlider = (policy.replication_slider !== undefined ? policy.replication_slider : 100) / 100.0;
+                
+                const miningCount = zoneProbes * miningSlider;
+                const buildCount = zoneProbes * (1.0 - miningSlider);  // Non-mining = building
+                
+                const replicateCount = buildCount * replicationSlider;
+                const constructCount = buildCount * (1.0 - replicationSlider);
+                
+                activities[zoneId] = {
+                    'harvest': miningCount,
+                    'replicate': replicateCount,
+                    'construct': constructCount,
+                    'dyson': 0
+                };
+            }
+        }
+        
+        return activities;
+    }
+    
     _calculateZoneDexterity() {
         // Returns per-zone dexterity capacity in kg/s: {zoneId: kg/s}
         const zoneDexterity = {};
@@ -1910,8 +2244,7 @@ class GameEngine {
         for (const [zoneId, probes] of Object.entries(this.probesByZone)) {
             const probeCount = probes.probe || 0;
             if (probeCount > 0) {
-                const probeData = this._getProbeData('probe');
-                const baseDexterity = probeData ? (probeData.base_dexterity || 1.0) : 1.0;
+                const baseDexterity = Probe.getBaseDexterity('probe');
                 zoneDexterity[zoneId] = (zoneDexterity[zoneId] || 0) + probeCount * baseDexterity;
             }
         }
@@ -2021,17 +2354,27 @@ class GameEngine {
         }
         
         if (isDysonZone) {
-            // Dyson zone: only construct vs replicate
-            const constructSlider = zonePolicy.construct_slider !== undefined ? zonePolicy.construct_slider : 50;
-            const constructFraction = constructSlider / 100.0;
-            const replicateFraction = 1.0 - constructFraction;
+            // Dyson zone: dyson_allocation_slider splits between Dyson construction and Build
+            // Labels: "Dyson" at top, "Build" at bottom
+            // Variable matches labels: higher value = more Dyson (top label)
+            // dyson_allocation_slider: 0 = all Build (bottom), 100 = all Dyson (top)
+            const dysonAllocationSlider = zonePolicy.dyson_allocation_slider !== undefined ? zonePolicy.dyson_allocation_slider : (zonePolicy.dyson_build_slider !== undefined ? (100 - zonePolicy.dyson_build_slider) : 100);
+            const dysonFraction = dysonAllocationSlider / 100.0; // 0 = 0% Dyson (all Build), 100 = 100% Dyson (all Dyson)
+            const buildFraction = 1.0 - dysonFraction; // Inverse: 0 = 100% Build, 100 = 0% Build
+            
+            const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+            const replicateFraction = replicationSlider / 100.0;
+            const constructFraction = 1.0 - replicateFraction;
+            
+            // Build capacity is only the Build fraction (not Dyson construction)
+            const buildCapacity = dexterityCapacity * buildFraction;
             
             return {
                 dexterityCapacity: dexterityCapacity,
                 harvestCapacity: 0.0, // No mining in Dyson zone
-                buildCapacity: dexterityCapacity,
-                replicateCapacity: dexterityCapacity * replicateFraction,
-                constructCapacity: dexterityCapacity * constructFraction,
+                buildCapacity: buildCapacity,
+                replicateCapacity: buildCapacity * replicateFraction,
+                constructCapacity: buildCapacity * constructFraction,
                 factoryProduction: factoryProduction,
                 buildingEffects: {
                     miningMultiplier: 0.0, // No mining
@@ -2040,13 +2383,13 @@ class GameEngine {
                 }
             };
         } else {
-            // Planetary zone: harvest vs build, then within build: replicate vs construct
+            // Planetary zone: mine vs build, then within build: replicate vs construct
             const miningSlider = zonePolicy.mining_slider !== undefined ? zonePolicy.mining_slider : 50;
             const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
             
-            // mining_slider: 0 = all build, 100 = all mine
+            // mining_slider: 0 = all build (top), 100 = all mine (bottom)
+            const buildFraction = (100 - miningSlider) / 100.0;
             const harvestFraction = miningSlider / 100.0;
-            const buildFraction = 1.0 - harvestFraction;
             
             // replication_slider: 0 = all construct, 100 = all replicate
             const replicateFraction = replicationSlider / 100.0;
@@ -2266,14 +2609,16 @@ class GameEngine {
             }
         }
         
-        // Allocate intelligence equally across enabled projects
+        // FLOPS are not accumulated - they're a production rate consumed directly by research
+        // Allocate available FLOPS production rate across enabled projects
         if (enabledProjects.length === 0) {
-            return;
+            return; // No research projects to consume FLOPS
         }
         
-        const intelligencePerProject = totalIntelligenceFlops / enabledProjects.length;
+        // Distribute available FLOPS production rate equally among enabled projects
+        const flopsPerProject = totalIntelligenceFlops / enabledProjects.length;
         
-        // Process each enabled project
+        // Process each enabled project - each consumes FLOPS from the production rate
         for (const [treeId, tierId, tier, tierData] of enabledProjects) {
             let tranchesCompleted = tierData.tranches_completed || 0;
             const maxTranches = tier.tranches || 10;
@@ -2303,17 +2648,38 @@ class GameEngine {
                 }
             }
             
-            // Exponential cost: first tier = 10 PFLOPS, each tier is 2x more expensive
-            const baseCostPflops = 10.0; // 10 PFLOPS for first tier
-            const tierCostPflops = baseCostPflops * Math.pow(2.0, tierIndex);
-            const tierCostFlops = tierCostPflops * 1e15; // Convert to FLOPS
+            // Exponential cost: tier 1 = 1e3 PFLOPS, scaling as base_amount * k^n where n is the tier number
+            // tierIndex is 0-indexed, so tier 1 has tierIndex=0, tier 2 has tierIndex=1, etc.
+            // Formula: cost = base_amount * k^n where n is tier number (1-indexed)
+            // We want tier 1 to cost 1e3 PFLOPS: 1e3 = base_amount * k^1
+            // Setting base_amount = 1e3 / k ensures tier 1 = 1e3
+            // So: cost = (1e3 / k) * k^n = 1e3 * k^(n-1)
+            const baseCostPflops = 1e3; // 1000 PFLOPS (target cost for tier 1)
+            const growthFactor = 3.0; // k = 3.0 (exponential growth factor)
+            const tierNumber = tierIndex + 1; // Convert 0-indexed to 1-indexed tier number
+            // For tier 1 (tierNumber=1): cost = baseCost * k^(1-1) = baseCost * 1 = 1e3 PFLOPS
+            // For tier 2 (tierNumber=2): cost = baseCost * k^(2-1) = baseCost * k = 3e3 PFLOPS
+            // For tier 3 (tierNumber=3): cost = baseCost * k^(3-1) = baseCost * k^2 = 9e3 PFLOPS
+            const tierCostPflops = baseCostPflops * Math.pow(growthFactor, tierNumber - 1);
+            const tierCostFlops = tierCostPflops * 1e15; // Convert PFLOPS to FLOPS
             
-            // Progress: FLOPS allocated * time / total cost = fraction complete
-            const progressFlops = intelligencePerProject * deltaTime;
-            const progressFraction = progressFlops / tierCostFlops;
+            // Calculate FLOPS consumed by this project this tick
+            // Each project can consume up to its allocated share of the production rate
+            const flopsConsumedThisTick = flopsPerProject * deltaTime; // FLOPS consumed = rate * time
+            
+            // Calculate progress fraction: FLOPS consumed / total FLOPS needed
+            const progressFraction = flopsConsumedThisTick / tierCostFlops;
+            
+            // Maximum consumption rate: 1% per 100 seconds = 0.01 per 100 seconds = 0.0001 per second
+            // This limits how fast a research project can progress, even with unlimited FLOPS
+            const maxProgressRatePerSecond = 0.0001; // 1% per 100 seconds = 0.01% per second
+            const maxProgressFraction = maxProgressRatePerSecond * deltaTime;
+            
+            // Cap progress to maximum consumption rate per project
+            const cappedProgressFraction = Math.min(progressFraction, maxProgressFraction);
             
             // Convert to tranches (each tranche is 1/max_tranches of total progress)
-            const trancheProgress = progressFraction * maxTranches;
+            const trancheProgress = cappedProgressFraction * maxTranches;
             const newTranches = Math.floor(trancheProgress);
             
             if (newTranches > 0) {
@@ -2322,6 +2688,25 @@ class GameEngine {
                     maxTranches
                 );
             }
+            
+            // Also track fractional progress for smoother advancement
+            // Store the remainder for next tick (if we want continuous progress)
+            const remainingProgress = trancheProgress - newTranches;
+            if (remainingProgress > 0 && !tierData.fractional_progress) {
+                tierData.fractional_progress = 0.0;
+            }
+            if (remainingProgress > 0) {
+                tierData.fractional_progress = (tierData.fractional_progress || 0.0) + remainingProgress;
+                // Check if fractional progress accumulates to a full tranche
+                if (tierData.fractional_progress >= 1.0) {
+                    const additionalTranches = Math.floor(tierData.fractional_progress);
+                    tierData.tranches_completed = Math.min(
+                        tierData.tranches_completed + additionalTranches,
+                        maxTranches
+                    );
+                    tierData.fractional_progress = tierData.fractional_progress - additionalTranches;
+                }
+            }
         }
     }
     _calculateDysonConstructionRate() {
@@ -2329,17 +2714,29 @@ class GameEngine {
             return 0.0; // Already complete
         }
         
-        // Get probes allocated to Dyson construction
-        const dysonAllocation = this.probeAllocations.dyson || {};
-        const totalDysonProbes = Object.values(dysonAllocation).reduce((a, b) => a + b, 0);
+        // Check if there are actually probes in the Dyson zone
+        const dysonZoneId = 'dyson_sphere';
+        const dysonZoneProbes = Math.floor(this.probesByZone[dysonZoneId]?.probe || 0);
         
-        if (totalDysonProbes <= 0) {
+        // If no probes in Dyson zone, return 0
+        if (dysonZoneProbes <= 0) {
+            return 0.0;
+        }
+        
+        // Get probes allocated to Dyson construction from zone-based allocations
+        const dysonZoneAllocations = this.probeAllocationsByZone[dysonZoneId] || {};
+        const dysonZoneDysonAllocation = dysonZoneAllocations.dyson || {};
+        const totalDysonProbes = Object.values(dysonZoneDysonAllocation).reduce((a, b) => a + b, 0);
+        
+        // Round to integer and check if > 0
+        const totalDysonProbesInt = Math.floor(totalDysonProbes);
+        if (totalDysonProbesInt <= 0) {
             return 0.0;
         }
         
         // Calculate construction rate
         // Base rate: 0.1 kg/s per probe
-        const baseConstructionRate = totalDysonProbes * Config.PROBE_BUILD_RATE; // 0.1 kg/s per probe
+        const baseConstructionRate = totalDysonProbesInt * Config.PROBE_BUILD_RATE; // 0.1 kg/s per probe
         
         // Apply research bonuses
         const researchBonus = this._getResearchBonus('dyson_swarm_construction', 'dyson_construction_rate_multiplier', 1.0);
@@ -2356,6 +2753,13 @@ class GameEngine {
         
         if (this.dysonSphereMass >= this.dysonSphereTargetMass) {
             return idleProbes; // Already complete
+        }
+        
+        // Check if there are actually probes in the Dyson zone
+        const dysonZoneId = 'dyson_sphere';
+        const dysonZoneProbes = Math.floor(this.probesByZone[dysonZoneId]?.probe || 0);
+        if (dysonZoneProbes <= 0) {
+            return idleProbes; // No probes in Dyson zone
         }
         
         if (throttledConstructionRate <= 0) {
@@ -2442,6 +2846,18 @@ class GameEngine {
         return totalEfficiency;
     }
     _getResearchBonus(treeId, bonusKey, defaultValue = 1.0) {
+        // Use cache if available
+        const cache = window.calculationCache;
+        if (cache) {
+            return cache.getResearchBonus(treeId, bonusKey, defaultValue, () => {
+                return this._calculateResearchBonus(treeId, bonusKey, defaultValue);
+            });
+        }
+        
+        return this._calculateResearchBonus(treeId, bonusKey, defaultValue);
+    }
+    
+    _calculateResearchBonus(treeId, bonusKey, defaultValue = 1.0) {
         if (!(treeId in this.research)) {
             return defaultValue;
         }
@@ -2601,6 +3017,31 @@ class GameEngine {
         breakdown.production.base += structureProduction;
         breakdown.production.breakdown.structures = structureProduction;
         
+        // Production: Dyson sphere energy
+        const computePowerSlider = this.dysonPowerAllocation || 0;
+        let economyFraction = 1.0;
+        if (computePowerSlider <= 50) {
+            // 0-50%: linear from 100% economy to 0% economy
+            economyFraction = (50 - computePowerSlider) / 50.0;
+        } else {
+            // Above 50%: 0% economy (all goes to compute, including overclocking)
+            economyFraction = 0.0;
+        }
+        
+        let dysonEnergyProduction = 0.0;
+        if (this.dysonSphereMass >= this.dysonSphereTargetMass) {
+            // Complete Dyson sphere: all star's power
+            const sunTotalPower = 3.8e26; // watts
+            dysonEnergyProduction = sunTotalPower * economyFraction;
+        } else {
+            // During construction: 5 kW per kg
+            const dysonPower = this.dysonSphereMass * 5000; // 5000W = 5 kW per kg
+            dysonEnergyProduction = dysonPower * economyFraction;
+        }
+        
+        breakdown.production.base += dysonEnergyProduction;
+        breakdown.production.breakdown.dyson_sphere = dysonEnergyProduction;
+        
         // Production: Energy Collection Efficiency research
         const energyCollectionBonus = this._getResearchBonus('energy_collection', 'solar_efficiency_multiplier', 1.0);
         if (energyCollectionBonus > 1.0) {
@@ -2615,25 +3056,10 @@ class GameEngine {
         }
         breakdown.production.total = breakdown.production.base * energyCollectionBonus;
         
-        // Consumption: Probe base consumption
-        const baseProbeConsumption = Config.PROBE_ENERGY_CONSUMPTION;
-        const probeConsumption = {
-            'probe': baseProbeConsumption,
-            'miner_probe': baseProbeConsumption * 0.8,
-            'compute_probe': baseProbeConsumption * 1.5,
-            'energy_probe': -baseProbeConsumption * 0.2, // Negative = generates
-            'construction_probe': baseProbeConsumption * 1.2
-        };
-        
-        let probeBaseConsumption = 0;
-        for (const [probeType, count] of Object.entries(this.probes)) {
-            if (probeType in probeConsumption) {
-                probeBaseConsumption += count * probeConsumption[probeType];
-            }
-        }
-        
-        breakdown.consumption.base = probeBaseConsumption;
-        breakdown.consumption.breakdown.probes = probeBaseConsumption;
+        // Consumption: Probe base consumption removed
+        // Probes only consume energy when actively: harvesting, building, or constructing Dyson
+        breakdown.consumption.base = 0;
+        breakdown.consumption.breakdown.probes = 0;
         
         // Consumption: Structures
         let structureConsumption = 0;
@@ -2738,17 +3164,42 @@ class GameEngine {
     
     _calculateDexterityBreakdown() {
         const breakdown = {
-            'probes': {'base': 0, 'total': 0, 'upgrades': []},
+            'probes': {'base': 0, 'total': 0, 'upgrades': [], 'breakdown': {}},
             'factories': {'total': 0}
         };
         
         // Base dexterity from probes - single probe type only
-        const probeCount = this.probes.probe || 0;
-        const probeData = this._getProbeData('probe');
-        const baseDex = probeData ? (probeData.base_dexterity || 1.0) : 1.0;
-        const baseDexterity = probeCount * baseDex;
+        // Calculate per-zone breakdown
+        const zoneBreakdown = {}; // {zoneId: {probeCount: number, baseDexterity: number}}
+        const baseDex = Probe.getBaseDexterity('probe');
+        let totalProbeCount = 0;
         
+        // Zone-based probes (new system)
+        for (const [zoneId, probes] of Object.entries(this.probesByZone)) {
+            const probeCount = probes.probe || 0;
+            if (probeCount > 0) {
+                totalProbeCount += probeCount;
+                const zoneDexterity = probeCount * baseDex;
+                zoneBreakdown[zoneId] = {
+                    probeCount: probeCount,
+                    baseDexterity: zoneDexterity
+                };
+            }
+        }
+        
+        // Legacy: global probes
+        const legacyProbeCount = this.probes.probe || 0;
+        if (legacyProbeCount > 0 && Object.keys(this.probesByZone).length === 0) {
+            totalProbeCount += legacyProbeCount;
+            zoneBreakdown['global'] = {
+                probeCount: legacyProbeCount,
+                baseDexterity: legacyProbeCount * baseDex
+            };
+        }
+        
+        const baseDexterity = totalProbeCount * baseDex;
         breakdown.probes.base = baseDexterity;
+        breakdown.probes.breakdown = zoneBreakdown;
         
         // Robotic Systems research bonus
         const roboticBonus = this._getResearchBonus('robotic_systems', 'dexterity_multiplier', 1.0);
@@ -2802,7 +3253,7 @@ class GameEngine {
     _calculateIntelligenceBreakdown() {
         const breakdown = {
             'probes': {'base': 0, 'total': 0, 'upgrades': []},
-            'structures': {'base': 0, 'total': 0},
+            'structures': {'base': 0, 'total': 0, 'breakdown': {}},
             'total': 0
         };
         
@@ -2811,25 +3262,95 @@ class GameEngine {
         breakdown.probes.base = baseIntelligenceFlops;
         breakdown.probes.total = baseIntelligenceFlops;
         
-        // Research structures - in FLOPS
+        // Research structures - in FLOPS (from zone-based structures)
         let structureIntelligenceFlops = 0;
+        const structureBreakdown = {}; // {buildingId: {name: string, count: number, flops: number}}
+        
+        // Check zone-based structures (new system)
+        for (const [zoneId, zoneStructures] of Object.entries(this.structuresByZone)) {
+            for (const [buildingId, count] of Object.entries(zoneStructures)) {
+                if (count <= 0) continue;
+                
+                const building = this.dataLoader.getBuildingById(buildingId);
+                if (building) {
+                    const effects = building.effects || {};
+                    const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                    let buildingFlops = 0;
+                    
+                    if (intelligenceOutputFlops > 0) {
+                        buildingFlops = intelligenceOutputFlops * count;
+                    } else {
+                        // Legacy: convert from intelligence_per_second
+                        const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
+                        buildingFlops = intelligenceOutput * 1e12 * count;
+                    }
+                    
+                    if (buildingFlops > 0) {
+                        structureIntelligenceFlops += buildingFlops;
+                        
+                        // Add to breakdown
+                        if (!structureBreakdown[buildingId]) {
+                            structureBreakdown[buildingId] = {
+                                name: building.name || buildingId,
+                                count: 0,
+                                flops: 0
+                            };
+                        }
+                        structureBreakdown[buildingId].count += count;
+                        structureBreakdown[buildingId].flops += buildingFlops;
+                    }
+                }
+            }
+        }
+        
+        // Also check legacy global structures for backward compatibility
         for (const [buildingId, count] of Object.entries(this.structures)) {
+            if (count <= 0) continue;
+            
+            // Skip if already counted in zone structures
+            let alreadyCounted = false;
+            for (const zoneStructures of Object.values(this.structuresByZone)) {
+                if (zoneStructures[buildingId]) {
+                    alreadyCounted = true;
+                    break;
+                }
+            }
+            if (alreadyCounted) continue;
+            
             const building = this.dataLoader.getBuildingById(buildingId);
             if (building) {
                 const effects = building.effects || {};
                 const intelligenceOutputFlops = effects.intelligence_flops || 0;
+                let buildingFlops = 0;
+                
                 if (intelligenceOutputFlops > 0) {
-                    structureIntelligenceFlops += intelligenceOutputFlops * count;
+                    buildingFlops = intelligenceOutputFlops * count;
                 } else {
                     // Legacy: convert from intelligence_per_second
                     const intelligenceOutput = effects.intelligence_production_per_second || effects.intelligence_per_second || 0;
-                    structureIntelligenceFlops += intelligenceOutput * 1e12 * count;
+                    buildingFlops = intelligenceOutput * 1e12 * count;
+                }
+                
+                if (buildingFlops > 0) {
+                    structureIntelligenceFlops += buildingFlops;
+                    
+                    // Add to breakdown
+                    if (!structureBreakdown[buildingId]) {
+                        structureBreakdown[buildingId] = {
+                            name: building.name || buildingId,
+                            count: 0,
+                            flops: 0
+                        };
+                    }
+                    structureBreakdown[buildingId].count += count;
+                    structureBreakdown[buildingId].flops += buildingFlops;
                 }
             }
         }
         
         breakdown.structures.base = structureIntelligenceFlops;
         breakdown.structures.total = structureIntelligenceFlops;
+        breakdown.structures.breakdown = structureBreakdown;
         breakdown.total = breakdown.probes.total + breakdown.structures.total;
         
         return breakdown;
@@ -2851,8 +3372,7 @@ class GameEngine {
         let probeMetalConsumption = 0.0;
         for (const [probeType, rate] of Object.entries(probeRate)) {
             if (rate > 0) {
-                const probeData = this._getProbeData(probeType);
-                const metalCost = probeData ? (probeData.base_cost_metal || Config.PROBE_MASS) : Config.PROBE_MASS;
+                const metalCost = Probe.getMetalCost(probeType);
                 probeMetalConsumption += rate * metalCost;
             }
         }
@@ -3011,14 +3531,9 @@ class GameEngine {
         
         return allocationInfo;
     }
+    // Deprecated: Use Probe.getData() instead
     _getProbeData(probeType) {
-        const probes = this.dataLoader.getProbes();
-        for (const probe of probes) {
-            if (probe.id === probeType) {
-                return probe;
-            }
-        }
-        return null;
+        return Probe.getData(probeType);
     }
     
     _getBuildingCategory(buildingId) {
@@ -3096,7 +3611,8 @@ class GameEngine {
         // No upfront cost - buildings consume metal during construction
         
         // Toggle enabled state for continuous construction
-        const enabledKey = `${zoneId}_${buildingId}`;
+        // Use '::' as delimiter since zone IDs and building IDs can both contain underscores
+        const enabledKey = `${zoneId}::${buildingId}`;
         if (enabled === undefined || enabled === null) {
             // Toggle if not specified
             enabled = !this.enabledConstruction.has(enabledKey);
@@ -3115,6 +3631,12 @@ class GameEngine {
             // Note: Don't remove construction progress - let it finish if in progress
         }
         
+        // Invalidate structure cache
+        const cache = window.calculationCache;
+        if (cache) {
+            cache.invalidateStructures();
+        }
+        
         return {'success': true, 'building_id': buildingId, 'zone_id': zoneId, 'enabled': enabled};
     }
     
@@ -3129,13 +3651,11 @@ class GameEngine {
             throw new Error(`Invalid zone_id: ${zoneId}`);
         }
         
-        const probeData = this._getProbeData(probeType);
-        if (!probeData) {
+        // Check prerequisites - check in the zone where probe will be built
+        const prerequisites = Probe.getPrerequisites(probeType);
+        if (prerequisites.length === 0 && Probe.getData(probeType) === null) {
             throw new Error(`Probe type not found: ${probeType}`);
         }
-        
-        // Check prerequisites - check in the zone where probe will be built
-        const prerequisites = probeData.prerequisites || [];
         for (const prereq of prerequisites) {
             // Check if prerequisite structure exists in this zone
             let found = false;
@@ -3152,8 +3672,8 @@ class GameEngine {
         }
         
         // Check costs
-        const costMetal = probeData.base_cost_metal || 0;
-        const costEnergy = probeData.base_cost_energy || 0;
+        const costMetal = Probe.getMetalCost(probeType);
+        const costEnergy = Probe.getEnergyCost(probeType);
         
         if (this.metal < costMetal) {
             throw new Error(`Insufficient metal: need ${costMetal}, have ${this.metal}`);
@@ -3313,7 +3833,10 @@ class GameEngine {
         // Get total available 'probe' type probes across all zones
         let totalProbes = 0;
         for (const [zoneId, probes] of Object.entries(this.probesByZone)) {
-            totalProbes += probes.probe || 0;
+            // Ensure probe counts are integers
+            const probeCount = Math.floor(probes.probe || 0);
+            probes.probe = probeCount; // Update to integer
+            totalProbes += probeCount;
         }
         
         if (totalProbes <= 0) {
@@ -3356,7 +3879,9 @@ class GameEngine {
         // Distribute allocations across zones using zone policies
         // Each zone uses its own policy sliders to allocate probes
         for (const [zoneId, probes] of Object.entries(this.probesByZone)) {
-            const zoneProbeCount = probes.probe || 0;
+            // Ensure probe count is an integer
+            const zoneProbeCount = Math.floor(probes.probe || 0);
+            probes.probe = zoneProbeCount; // Update to integer
             if (zoneProbeCount <= 0) {
                 // No probes in this zone, reset allocations
                 if (this.probeAllocationsByZone[zoneId]) {
@@ -3385,22 +3910,45 @@ class GameEngine {
             const isDysonZone = zoneData && zoneData.is_dyson_zone;
             
             if (isDysonZone) {
-                // Dyson zone: construct vs replicate (NO MINING)
-                const constructSlider = (policy.construct_slider || 50) / 100.0;
+                // Dyson zone: dyson_allocation_slider splits between Dyson construction and Build
+                // Labels: "Dyson" at top, "Build" at bottom
+                // Variable now matches labels: higher value = more Dyson (top label)
+                // dyson_allocation_slider: 0 = all Build (bottom), 100 = all Dyson (top)
+                const dysonAllocationSlider = policy.dyson_allocation_slider !== undefined ? policy.dyson_allocation_slider : (policy.dyson_build_slider !== undefined ? (100 - policy.dyson_build_slider) : 100);
+                // Variable directly represents Dyson fraction (matches top label)
+                const dysonFraction = dysonAllocationSlider / 100.0; // 0 = 0% Dyson (all Build), 100 = 100% Dyson (all Dyson)
+                const buildFraction = 1.0 - dysonFraction; // Inverse: 0 = 100% Build, 100 = 0% Build
+                
+                // Within Build, split between construct and replicate using replication_slider
+                const replicationSlider = (policy.replication_slider !== undefined ? policy.replication_slider : 100) / 100.0;
+                const constructFraction = 1.0 - replicationSlider;
+                const replicateFraction = replicationSlider;
+                
+                if (!this.probeAllocationsByZone[zoneId].dyson) this.probeAllocationsByZone[zoneId].dyson = {probe: 0};
                 if (!this.probeAllocationsByZone[zoneId].construct) this.probeAllocationsByZone[zoneId].construct = {probe: 0};
                 if (!this.probeAllocationsByZone[zoneId].replicate) this.probeAllocationsByZone[zoneId].replicate = {probe: 0};
                 if (!this.probeAllocationsByZone[zoneId].harvest) this.probeAllocationsByZone[zoneId].harvest = {probe: 0};
-                this.probeAllocationsByZone[zoneId].construct.probe = zoneProbeCount * constructSlider;
-                this.probeAllocationsByZone[zoneId].replicate.probe = zoneProbeCount * (1.0 - constructSlider);
+                
+                // Allocate probes to Dyson construction
+                this.probeAllocationsByZone[zoneId].dyson.probe = zoneProbeCount * dysonFraction;
+                
+                // Allocate remaining probes to Build (split between construct and replicate)
+                const buildProbes = zoneProbeCount * buildFraction;
+                this.probeAllocationsByZone[zoneId].construct.probe = buildProbes * constructFraction;
+                this.probeAllocationsByZone[zoneId].replicate.probe = buildProbes * replicateFraction;
+                
                 // Explicitly set harvest to 0 for Dyson zone - no mining allowed
                 this.probeAllocationsByZone[zoneId].harvest.probe = 0;
             } else {
                 // Regular zones: use zone policies (mining_slider and replication_slider)
-                const miningSlider = (policy.mining_slider || 50) / 100.0;
-                const replicationSlider = (policy.replication_slider || 50) / 100.0;
+                // mining_slider: 0 = all build (top), 100 = all mine (bottom)
+                const miningSliderValue = policy.mining_slider !== undefined ? policy.mining_slider : 50;
+                const buildFraction = (100 - miningSliderValue) / 100.0;
+                const harvestFraction = miningSliderValue / 100.0;
+                const replicationSlider = (policy.replication_slider !== undefined ? policy.replication_slider : 100) / 100.0;
                 
-                const miningCount = zoneProbeCount * miningSlider;
-                const buildCount = zoneProbeCount * (1.0 - miningSlider);
+                const miningCount = zoneProbeCount * harvestFraction;
+                const buildCount = zoneProbeCount * buildFraction;
                 const replicateCount = buildCount * replicationSlider;
                 const constructCount = buildCount * (1.0 - replicationSlider);
                 
@@ -3499,12 +4047,7 @@ class GameEngine {
             // We don't need a rate - probes are removed immediately and added after transferTime
             const transferRate = 0; // Not used for one-time transfers
             
-            // Calculate energy cost per probe
-            const energyCostPerProbe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
-            const totalEnergyCost = energyCostPerProbe * count;
-            
-            // Allow transfers even with insufficient energy - they'll consume energy incrementally
-            // No upfront energy check - transfers will proceed as energy becomes available
+            // Transfers don't consume energy - probes use their own propulsion drives
             
             // Create one-time transfer that will be processed over time
             if (!this.activeTransfers) {
@@ -3515,11 +4058,12 @@ class GameEngine {
             if (!(fromZone in this.probesByZone)) {
                 this.probesByZone[fromZone] = {'probe': 0};
             }
-            const currentFrom = this.probesByZone[fromZone].probe || 0;
-            if (currentFrom < count) {
-                throw new Error(`Insufficient probes: need ${count}, have ${currentFrom}`);
+            const currentFrom = Math.floor(this.probesByZone[fromZone].probe || 0);
+            const countInt = Math.floor(count);
+            if (currentFrom < countInt) {
+                throw new Error(`Insufficient probes: need ${countInt}, have ${currentFrom}`);
             }
-            this.probesByZone[fromZone].probe = Math.max(0, currentFrom - count);
+            this.probesByZone[fromZone].probe = Math.max(0, currentFrom - countInt);
             
             const transferId = Date.now() + Math.random();
             const departureTime = this.time;
@@ -3535,10 +4079,6 @@ class GameEngine {
                 progress: 0,
                 totalCount: count,
                 transferTime: transferTime, // Store transfer time for transit tracking
-                energy_cost_per_probe: energyCostPerProbe,
-                total_energy_needed: totalEnergyCost,
-                energy_accumulated: 0, // Track energy accumulated for this transfer
-                energy_cost_per_second: energyCostPerProbe * transferRate,
                 paused: false,
                 startTime: this.time, // Use game time, not Date.now()
                 departureTime: departureTime,
@@ -3564,12 +4104,11 @@ class GameEngine {
                 throw new Error('Transfer rate must be between 0 and 100 (percentage of probe production)');
             }
             
-            // Calculate probe production rate in source zone
-            const [probeProductionRates] = this._calculateProbeProduction();
-            const totalProbeProductionRate = Object.values(probeProductionRates).reduce((a, b) => a + b, 0); // probes per second
+            // Calculate probe production rate in source zone (includes factory production, replication, and incoming transfers)
+            const sourceZoneProductionRate = this._calculateZoneProbeProductionRate(fromZone);
             
             // Calculate actual transfer rate as percentage of production
-            const actualTransferRate = (totalProbeProductionRate * rate) / 100.0; // probes per second
+            const actualTransferRate = (sourceZoneProductionRate * rate) / 100.0; // probes per second
             
             // Calculate transfer time to determine arrival rate
             const fromZoneData = zones.find(z => z.id === fromZone);
@@ -3590,9 +4129,7 @@ class GameEngine {
                 this.activeTransfers = [];
             }
             
-            // Calculate energy cost per second
-            const energyCostPerProbe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
-            const energyCostPerSecond = energyCostPerProbe * actualTransferRate;
+            // Transfers don't consume energy - probes use their own propulsion drives
             
             const transferId = Date.now() + Math.random();
             const transfer = {
@@ -3603,7 +4140,6 @@ class GameEngine {
                 rate: actualTransferRate, // probes per second (actual rate, not percentage)
                 ratePercentage: rate, // store original percentage
                 transferTime: transferTime, // time for probes to arrive
-                energy_cost_per_second: energyCostPerSecond,
                 paused: false,
                 inTransit: [] // probes currently in transit: [{count, arrivalTime}]
             };
@@ -3621,7 +4157,7 @@ class GameEngine {
                 startTime: Date.now()
             });
             
-            return {'success': true, 'transfer_id': transferId, 'transfer_rate': actualTransferRate, 'energy_cost_per_second': energyCostPerSecond};
+            return {'success': true, 'transfer_id': transferId, 'transfer_rate': actualTransferRate};
         }
     }
     
@@ -3661,6 +4197,9 @@ class GameEngine {
             // Faster probes = shorter transfer time
             transferTime = transferTime / speedMultiplier;
             
+            // Apply transportation structure speed boosts (from source zone)
+            transferTime = this._applyTransportSpeedBoosts(fromZoneId, transferTime);
+            
             return transferTime;
         }
         
@@ -3695,24 +4234,154 @@ class GameEngine {
         // Faster probes = shorter transfer time
         transferTime = transferTime / speedMultiplier;
         
+        // Apply transportation structure speed boosts (from source zone)
+        transferTime = this._applyTransportSpeedBoosts(fromZoneId, transferTime);
+        
+        return transferTime;
+    }
+    
+    /**
+     * Apply speed boosts from transportation structures in the source zone.
+     * Uses exponential decay: effective_reduction = 1 - (1 - base_reduction)^num_structures
+     * Minimum transfer time is 5% of original (95% max reduction), except for wormhole network.
+     * @param {string} zoneId - The source zone ID
+     * @param {number} baseTransferTime - The base transfer time before speed boosts
+     * @returns {number} Transfer time after applying speed boosts
+     */
+    _applyTransportSpeedBoosts(zoneId, baseTransferTime) {
+        const originalTransferTime = baseTransferTime;
+        let transferTime = baseTransferTime;
+        
+        // Check for wormhole network first (bypasses all limits)
+        const zoneStructures = this.structuresByZone[zoneId] || {};
+        let hasWormholeNetwork = false;
+        
+        // Check for transportation structures with speed boosts
+        const transportStructures = {}; // {buildingId: {count: number, speedMultiplier: number, bypassLimit: boolean}}
+        
+        for (const [buildingId, count] of Object.entries(zoneStructures)) {
+            if (count <= 0) continue;
+            
+            const building = this.dataLoader.getBuildingById(buildingId);
+            if (building) {
+                const effects = building.effects || {};
+                const speedMultiplier = effects.transfer_speed_multiplier || 0;
+                const bypassLimit = effects.bypass_speed_limit || false;
+                
+                if (speedMultiplier > 0) {
+                    if (effects.wormhole_network) {
+                        hasWormholeNetwork = true;
+                    }
+                    
+                    if (!transportStructures[buildingId]) {
+                        transportStructures[buildingId] = {
+                            count: 0,
+                            speedMultiplier: speedMultiplier,
+                            bypassLimit: bypassLimit
+                        };
+                    }
+                    transportStructures[buildingId].count += count;
+                }
+            }
+        }
+        
+        // If wormhole network exists, apply near-instant transfer (0.1% of original time)
+        if (hasWormholeNetwork) {
+            return originalTransferTime * 0.001; // 99.9% reduction, effectively instant
+        }
+        
+        // Otherwise, apply exponential decay for each structure type
+        // Calculate total reduction from all structure types combined
+        let totalReductionFraction = 1.0; // Start with 100% of original time
+        
+        for (const [buildingId, data] of Object.entries(transportStructures)) {
+            const baseReduction = data.speedMultiplier; // e.g., 0.10 = 10% reduction per structure
+            const count = data.count;
+            
+            // Exponential decay per structure type: effective_reduction = 1 - (1 - base_reduction)^count
+            // This means each additional structure of the same type provides diminishing returns
+            // Example: 10% base reduction
+            //   1 structure: 1 - (1-0.10)^1 = 10% reduction
+            //   2 structures: 1 - (1-0.10)^2 = 19% reduction (not 20%)
+            //   3 structures: 1 - (1-0.10)^3 = 27.1% reduction (not 30%)
+            const structureReduction = 1.0 - Math.pow(1.0 - baseReduction, count);
+            
+            // Apply reduction multiplicatively (each type reduces the remaining time)
+            totalReductionFraction *= (1.0 - structureReduction);
+        }
+        
+        // Calculate final transfer time
+        transferTime = originalTransferTime * totalReductionFraction;
+        
+        // Cap at 95% reduction maximum (minimum 5% of original time)
+        // This ensures we can't go below 5% of original time, regardless of how many structures
+        // Unless wormhole network bypasses this (already handled above)
+        const minTransferTime = originalTransferTime * 0.05;
+        transferTime = Math.max(transferTime, minTransferTime);
+        
         return transferTime;
     }
     
     _calculateTransferEnergyCost(fromZone, toZone, probeCount) {
-        // Calculate delta-v for Hohmann transfer
-        const r1 = fromZone.radius_au || 1.0;
-        const r2 = toZone.radius_au || 1.0;
+        // Transfers don't consume energy - probes use their own propulsion drives
+        return 0;
+    }
+    
+    /**
+     * Calculate the net probe production rate for a specific zone.
+     * This includes factory production, replication production, and incoming transfers.
+     * @param {string} zoneId - The zone ID to calculate production for
+     * @returns {number} Probe production rate in probes per second
+     */
+    _calculateZoneProbeProductionRate(zoneId) {
+        let sourceZoneNetIncreaseRate = 0.0;
         
-        // Simplified Hohmann transfer delta-v
-        const radiusRatio = Math.max(r1, r2) / Math.min(r1, r2);
-        const deltaV = 30.0 * Math.sqrt(radiusRatio) * 0.5; // km/s
+        // 1. Factory production in source zone
+        if (this.factoryProductionByZone && this.factoryProductionByZone[zoneId]) {
+            sourceZoneNetIncreaseRate += this.factoryProductionByZone[zoneId].rate || 0;
+        }
         
-        // Energy cost: E = 0.5 * m * v^2
-        const probeMass = 10.0; // kg per probe
-        const energyPerProbe = 0.5 * probeMass * (deltaV * 1000) * (deltaV * 1000); // Joules (v in m/s)
-        const energyCost = energyPerProbe * probeCount; // Total energy in Joules
+        // 2. Replication production in source zone
+        const zoneAllocations = this.probeAllocationsByZone[zoneId] || {};
+        const replicateAllocation = zoneAllocations.replicate || {};
+        let replicatingProbesInZone = Object.values(replicateAllocation).reduce((a, b) => a + b, 0);
         
-        return energyCost; // Return in Joules (will be converted to kW in UI)
+        // Also check construct allocations that are set to replicate
+        const constructAllocation = zoneAllocations.construct || {};
+        const constructingProbesInZone = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+        if (constructingProbesInZone > 0) {
+            const zonePolicy = this.zonePolicies[zoneId] || {};
+            const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+            const replicateFraction = replicationSlider / 100.0;
+            replicatingProbesInZone += constructingProbesInZone * replicateFraction;
+        }
+        
+        // Calculate replication rate (probes building other probes)
+        const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
+        const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
+        const replicationRate = replicatingProbesInZone * effectiveBuildRate;
+        
+        // Get metal cost per probe for replication
+        const metalCostPerProbe = Probe.getMetalCost('probe');
+        
+        // Convert replication rate from kg/s to probes/s
+        const replicationProbesPerSecond = replicationRate / metalCostPerProbe;
+        sourceZoneNetIncreaseRate += replicationProbesPerSecond;
+        
+        // 3. Incoming transfers arriving at source zone
+        let incomingTransferRate = 0.0;
+        if (this.activeTransfers) {
+            for (const otherTransfer of this.activeTransfers) {
+                if (otherTransfer.paused) continue;
+                if (otherTransfer.to === zoneId && otherTransfer.type === 'continuous') {
+                    incomingTransferRate += otherTransfer.rate || 0;
+                }
+            }
+        }
+        
+        sourceZoneNetIncreaseRate += incomingTransferRate;
+        
+        return sourceZoneNetIncreaseRate;
     }
     
     _updateTransfer(actionData) {
@@ -3732,12 +4401,7 @@ class GameEngine {
         const oldRate = transfer.rate;
         transfer.rate = newRate;
         
-        // Recalculate energy cost
-        const zones = this.dataLoader.orbitalZones || [];
-        const fromZoneData = zones.find(z => z.id === transfer.from);
-        const toZoneData = zones.find(z => z.id === transfer.to);
-        const energyCostPerProbe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
-        transfer.energy_cost_per_second = energyCostPerProbe * newRate;
+        // Transfers don't consume energy - probes use their own propulsion drives
         
         // Update history
         const historyItem = this.transferHistory.find(t => t.id == transferId);
@@ -4137,14 +4801,38 @@ class GameEngineClient {
             }
             
             // Execute single tick with time-scaled delta_time
+            const tickStartTime = performance.now();
             this.engine.tick(effectiveDeltaTime);
+            const tickEndTime = performance.now();
             
-            // Emit game state update event
-            const gameState = this.engine.getState();
-            if (gameState) {
-                this.updateGameState(gameState);
-            } else {
-                console.warn('GameEngineClient.tick(): getState() returned null/undefined');
+            // Record tick time
+            const profiler = window.performanceProfiler;
+            if (profiler) {
+                profiler.recordTickTime(tickEndTime - tickStartTime);
+            }
+            
+            // Emit game state update event (batched - only every N ticks)
+            // Phase 4: Batch updates - update UI less frequently
+            if (!this.uiUpdateCounter) {
+                this.uiUpdateCounter = 0;
+            }
+            this.uiUpdateCounter++;
+            
+            // Update UI every 2 ticks (30fps instead of 60fps)
+            const updateUI = this.uiUpdateCounter >= 2;
+            
+            if (updateUI) {
+                this.uiUpdateCounter = 0;
+                const gameState = this.engine.getState();
+                if (gameState) {
+                    // Record memory usage
+                    if (profiler) {
+                        profiler.recordMemoryUsage(gameState);
+                    }
+                    this.updateGameState(gameState);
+                } else {
+                    console.warn('GameEngineClient.tick(): getState() returned null/undefined');
+                }
             }
         } catch (error) {
             console.error('Error in game tick:', error);

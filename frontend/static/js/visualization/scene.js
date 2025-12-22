@@ -21,12 +21,28 @@ class SceneManager {
         this.camera.position.set(0, 0, 15);
 
         // Renderer
-        this.renderer = new THREE.WebGLRenderer({
-            canvas: this.canvas,
-            antialias: true
-        });
-        this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        try {
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: this.canvas,
+                antialias: true
+            });
+            this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+            this.renderer.setPixelRatio(window.devicePixelRatio);
+        } catch (error) {
+            console.error('Failed to create WebGL renderer:', error);
+            // Try fallback renderer without antialiasing
+            try {
+                this.renderer = new THREE.WebGLRenderer({
+                    canvas: this.canvas,
+                    antialias: false
+                });
+                this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+            } catch (fallbackError) {
+                console.error('Failed to create fallback WebGL renderer:', fallbackError);
+                throw new Error('WebGL is not supported in this browser');
+            }
+        }
 
         // Lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
