@@ -685,7 +685,7 @@ class OrbitalZoneSelector {
                     <div class="probe-summary-value">${this.formatNumber(Math.floor(numProbes))}</div>
                 </div>
                 <div class="probe-summary-item">
-                    <div class="probe-summary-label">Dyson Build Rate</div>
+                    <div class="probe-summary-label">Dyson Construction Rate</div>
                     <div class="probe-summary-value">${formatRate(dysonBuildRate)} kg/s</div>
                 </div>
                 ${droneProductionRate > 0 ? `
@@ -724,12 +724,10 @@ class OrbitalZoneSelector {
                     <div class="probe-summary-value">${formatRate(probesPerSecond)} /s</div>
                 </div>
                 ` : ''}
-                ${metalMiningRate > 0 ? `
                 <div class="probe-summary-item">
                     <div class="probe-summary-label">Mining Rate</div>
                     <div class="probe-summary-value">${formatRate(metalMiningRate)} kg/s metal</div>
                 </div>
-                ` : ''}
                 ${slagMiningRate > 0 ? `
                 <div class="probe-summary-item">
                     <div class="probe-summary-label">Slag Production</div>
@@ -1236,14 +1234,20 @@ class OrbitalZoneSelector {
     updateTransferArcs() {
         // Get active transfers from game state
         if (this.gameState && this.gameState.active_transfers) {
+            const currentTime = this.gameState.time || 0;
             // Filter out completed one-time transfers
             this.transferArcs = this.gameState.active_transfers.filter(transfer => {
                 // Keep continuous transfers and incomplete one-time transfers
                 if (transfer.type === 'continuous') {
                     return true;
                 }
-                // For one-time transfers, check if they're complete
+                // For one-time transfers, check if they've arrived
                 if (transfer.type === 'one-time') {
+                    // If arrivalTime is set and hasn't been reached yet, transfer is still active
+                    if (transfer.arrivalTime !== undefined) {
+                        return transfer.arrivalTime > currentTime;
+                    }
+                    // Fallback: check progress (for backward compatibility)
                     const progress = transfer.progress || 0;
                     const totalCount = transfer.totalCount || transfer.count || 0;
                     return progress < totalCount;
@@ -1270,7 +1274,11 @@ class OrbitalZoneSelector {
         const toSquare = this.container.querySelector(`.orbital-zone-planet-square-float[data-zone="${transfer.to}"]`);
         if (!fromSquare || !toSquare) return;
         
-        // Create SVG overlay for transfer arc
+        // Get positions relative to the planet squares container
+        const planetSquaresContainer = this.container.querySelector('.orbital-zone-planet-squares');
+        if (!planetSquaresContainer) return;
+        
+        // Create SVG overlay for transfer arc - position it relative to planet squares container
         let svgContainer = this.container.querySelector('.transfer-arc-svg-container');
         if (!svgContainer) {
             svgContainer = document.createElement('div');
@@ -1282,22 +1290,18 @@ class OrbitalZoneSelector {
             svgContainer.style.height = '100%';
             svgContainer.style.pointerEvents = 'none';
             svgContainer.style.zIndex = '10';
-            const content = this.container.querySelector('.orbital-zone-selector-content');
-            if (content) {
-                content.appendChild(svgContainer);
-            } else {
-                return; // Can't draw without container
-            }
+            // Append to planet squares container so coordinates are relative to it
+            planetSquaresContainer.appendChild(svgContainer);
         }
         
-        // Get positions relative to the planet squares container
-        const planetSquaresContainer = this.container.querySelector('.orbital-zone-planet-squares');
-        if (!planetSquaresContainer) return;
-        
+        // Get positions relative to planet squares container
+        // Use offsetLeft/offsetTop for more reliable positioning
+        const containerRect = planetSquaresContainer.getBoundingClientRect();
         const fromRect = fromSquare.getBoundingClientRect();
         const toRect = toSquare.getBoundingClientRect();
-        const containerRect = planetSquaresContainer.getBoundingClientRect();
         
+        // Calculate center positions of planet squares relative to container
+        // The planet squares are already positioned above the zone selectors
         const fromX = fromRect.left + fromRect.width / 2 - containerRect.left;
         const fromY = fromRect.top + fromRect.height / 2 - containerRect.top;
         const toX = toRect.left + toRect.width / 2 - containerRect.left;
