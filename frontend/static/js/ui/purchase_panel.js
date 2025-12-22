@@ -575,41 +575,60 @@ class PurchasePanel {
                 ? gameState.enabled_construction 
                 : [];
             
-            // Calculate structure building dexterity per zone
-            const probeAllocationsByZone = gameState.probe_allocations_by_zone || {};
-            const zonePolicies = gameState.zone_policies || {};
-            const buildAllocation = gameState.build_allocation || 100; // 0 = all structures, 100 = all probes
-            const structureFraction = (100 - buildAllocation) / 100.0;
+            // Cache calculations - only recalculate if relevant values changed
+            const progressCacheKey = JSON.stringify({
+                probeAllocations: gameState.probe_allocations_by_zone,
+                buildAllocation: gameState.build_allocation,
+                enabledConstruction: enabledConstruction,
+                roboticBonus: gameState.resource_breakdowns?.dexterity?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0
+            });
             
-            // Get research multiplier for build rate
-            const breakdown = gameState.resource_breakdowns?.dexterity;
-            const roboticBonus = breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0;
-            const totalMultiplier = 1.0 + (roboticBonus || 0);
-            
-            // Base build rate: 10 kg/day per probe (from Config.PROBE_BUILD_RATE)
-            const PROBE_BUILD_RATE = 10.0; // kg/day per probe
-            
-            // Calculate build rate per zone
-            const buildRateByZone = {};
-            for (const [zoneId, zoneAllocations] of Object.entries(probeAllocationsByZone)) {
-                const constructAllocation = zoneAllocations.construct || {};
-                const constructingProbes = Object.values(constructAllocation).reduce((sum, count) => sum + (count || 0), 0);
-                const structureBuildingProbes = constructingProbes * structureFraction;
-                const zoneBuildRateKgPerDay = structureBuildingProbes * PROBE_BUILD_RATE * totalMultiplier;
-                buildRateByZone[zoneId] = zoneBuildRateKgPerDay;
-            }
-            
-            // Count enabled buildings per zone
-            const enabledBuildingsByZone = {};
-            for (const enabledKey of enabledConstruction) {
-                const [zoneId, buildingId] = enabledKey.split('::', 2);
-                if (zoneId && buildingId) {
-                    if (!(zoneId in enabledBuildingsByZone)) {
-                        enabledBuildingsByZone[zoneId] = [];
-                    }
-                    enabledBuildingsByZone[zoneId].push(enabledKey);
+            // Reuse cached calculations if nothing changed
+            if (this.lastProgressCacheKey !== progressCacheKey) {
+                // Calculate structure building dexterity per zone
+                const probeAllocationsByZone = gameState.probe_allocations_by_zone || {};
+                const buildAllocation = gameState.build_allocation || 100; // 0 = all structures, 100 = all probes
+                const structureFraction = (100 - buildAllocation) / 100.0;
+                
+                // Get research multiplier for build rate
+                const breakdown = gameState.resource_breakdowns?.dexterity;
+                const roboticBonus = breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0;
+                const totalMultiplier = 1.0 + (roboticBonus || 0);
+                
+                // Base build rate: 10 kg/day per probe (from Config.PROBE_BUILD_RATE)
+                const PROBE_BUILD_RATE = 10.0; // kg/day per probe
+                
+                // Calculate build rate per zone
+                const buildRateByZone = {};
+                for (const [zoneId, zoneAllocations] of Object.entries(probeAllocationsByZone)) {
+                    const constructAllocation = zoneAllocations.construct || {};
+                    const constructingProbes = Object.values(constructAllocation).reduce((sum, count) => sum + (count || 0), 0);
+                    const structureBuildingProbes = constructingProbes * structureFraction;
+                    const zoneBuildRateKgPerDay = structureBuildingProbes * PROBE_BUILD_RATE * totalMultiplier;
+                    buildRateByZone[zoneId] = zoneBuildRateKgPerDay;
                 }
+                
+                // Count enabled buildings per zone
+                const enabledBuildingsByZone = {};
+                for (const enabledKey of enabledConstruction) {
+                    const [zoneId, buildingId] = enabledKey.split('::', 2);
+                    if (zoneId && buildingId) {
+                        if (!(zoneId in enabledBuildingsByZone)) {
+                            enabledBuildingsByZone[zoneId] = [];
+                        }
+                        enabledBuildingsByZone[zoneId].push(enabledKey);
+                    }
+                }
+                
+                // Cache the results
+                this.cachedProgressData = {
+                    buildRateByZone,
+                    enabledBuildingsByZone
+                };
+                this.lastProgressCacheKey = progressCacheKey;
             }
+            
+            const { buildRateByZone, enabledBuildingsByZone } = this.cachedProgressData || { buildRateByZone: {}, enabledBuildingsByZone: {} };
             
             // Cache progress containers to avoid repeated queries
             if (!this.cachedElements.buildingProgressContainers) {
