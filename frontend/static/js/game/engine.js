@@ -29,9 +29,11 @@ class GameEngine {
         this.probeAllocationsByZone = {};
         
         // Legacy: keep global probe counts for backward compatibility during transition
+        // Note: This is kept for backward compatibility but should not be used for new games
+        // All probes are now tracked in probesByZone
         const initialProbes = config.initial_probes !== undefined ? config.initial_probes : Config.INITIAL_PROBES;
         this.probes = {
-            'probe': initialProbes  // Single probe type only
+            'probe': 0  // Start with 0 - probes are tracked in probesByZone instead
         };
         
         // Legacy probe allocations (will be replaced by zone-specific)
@@ -173,12 +175,19 @@ class GameEngine {
                 };
             }
             
-            // Earth starts with 1 probe
-            if (zoneId === 'earth') {
-                const initialProbes = this.config.initial_probes !== undefined ? this.config.initial_probes : Config.INITIAL_PROBES;
+            // Dyson zone starts with 10 probes and 1 mobile factory
+            if (isDysonZone) {
+                const initialProbes = this.config.initial_probes !== undefined ? this.config.initial_probes : 10;
                 this.probesByZone[zoneId] = {
                     'probe': initialProbes
                 };
+                // Add mobile factory to Dyson zone
+                if (!this.structuresByZone[zoneId]) {
+                    this.structuresByZone[zoneId] = {};
+                }
+                this.structuresByZone[zoneId]['mobile_factory'] = 1;
+                // Also add to legacy global structures
+                this.structures['mobile_factory'] = 1;
             }
             
             // Initialize probe allocations by zone - single probe type only
@@ -202,26 +211,29 @@ class GameEngine {
                 this.structuresByZone[zoneId] = {};
             }
             
-            // Earth starts with 1 solar array, 1 refinery, 1 mobile factory
-            if (zoneId === 'earth') {
+            // Mercury starts with 1 solar array (orbital array)
+            if (zoneId === 'mercury') {
                 if (!this.structuresByZone[zoneId]) {
                     this.structuresByZone[zoneId] = {};
                 }
                 this.structuresByZone[zoneId]['solar_array_basic'] = 1;
-                this.structuresByZone[zoneId]['refinery'] = 1;
-                this.structuresByZone[zoneId]['mobile_factory'] = 1;
                 // Also add to legacy global structures
                 this.structures['solar_array_basic'] = 1;
-                this.structures['refinery'] = 1;
-                this.structures['mobile_factory'] = 1;
+            }
+            
+            // Asteroid belt starts with 1 mining station
+            if (zoneId === 'asteroid_belt') {
+                if (!this.structuresByZone[zoneId]) {
+                    this.structuresByZone[zoneId] = {};
+                }
+                this.structuresByZone[zoneId]['basic_mining_station'] = 1;
+                // Also add to legacy global structures
+                this.structures['basic_mining_station'] = 1;
             }
         }
         
-        // Place initial probes in default zone (Earth)
-        const initialProbes = this.config.initial_probes !== undefined ? this.config.initial_probes : Config.INITIAL_PROBES;
-        if (initialProbes > 0 && this.defaultZone in this.probesByZone) {
-            this.probesByZone[this.defaultZone]['probe'] = initialProbes;
-        }
+        // Note: Initial probes are already placed in Earth zone above (line 177-181)
+        // No need to place them again here
         
         // Load initial research trees
         this._initializeResearch();
@@ -423,7 +435,10 @@ class GameEngine {
             const structureBuildingFraction = 1.0 - (this.buildAllocation / 100.0);
             const structureBuildingProbes = constructingProbes * structureBuildingFraction;
             if (structureBuildingProbes > 0) {
-                structureMetalConsumption = structureBuildingProbes * Config.PROBE_BUILD_RATE;
+                // Apply research bonuses for building rate
+                const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
+                const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
+                structureMetalConsumption = structureBuildingProbes * effectiveBuildRate;
             }
         }
         
@@ -446,7 +461,7 @@ class GameEngine {
             'intelligence': this.intelligence,
             'dexterity': this.dexterity,
             'slag': this.slag,
-            'probes': this.probes, // Legacy: global probe counts
+            'probes': this._calculateTotalProbes(), // Calculate total probes across all zones
             'probes_by_zone': this.probesByZone, // New: probes per zone
             'probe_allocations': this.probeAllocations, // Legacy: global allocations
             'probe_allocations_by_zone': this.probeAllocationsByZone, // New: allocations per zone
@@ -500,8 +515,27 @@ class GameEngine {
     }
     
     tick(deltaTime) {
+        // Ensure deltaTime is valid
+        if (!deltaTime || deltaTime <= 0 || isNaN(deltaTime) || !isFinite(deltaTime)) {
+            console.warn('Invalid deltaTime in tick:', deltaTime);
+            return;
+        }
+        
         this.tickCount += 1;
+        const previousTime = this.time;
         this.time += deltaTime;
+        
+        // Debug: Log time increment every 60 ticks (once per second at 60 ticks/sec)
+        if (this.tickCount % 60 === 0) {
+            const timeSpeed = typeof window !== 'undefined' && window.gameEngine ? window.gameEngine.timeSpeed : 'unknown';
+            console.log(`Tick ${this.tickCount}: time=${this.time.toFixed(2)}s, deltaTime=${deltaTime.toFixed(4)}s, timeSpeed=${timeSpeed}`);
+        }
+        
+        // Ensure time is valid
+        if (!isFinite(this.time) || isNaN(this.time)) {
+            console.error('Time became invalid:', this.time, 'deltaTime:', deltaTime, 'previousTime:', previousTime);
+            this.time = previousTime || 0;
+        }
         
         // Calculate base production and consumption rates (before energy throttling)
         const energyProduction = this._calculateEnergyProduction();
@@ -615,9 +649,12 @@ class GameEngine {
             const constructAllocation = this.probeAllocations.construct || {};
             const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
             const structureBuildingFraction = 1.0 - (this.buildAllocation / 100.0);
-            const structureBuildingProbes = constructingProbes * structureBuildingFraction;
-            if (structureBuildingProbes > 0) {
-                const structureConstructionRateKgS = structureBuildingProbes * Config.PROBE_BUILD_RATE;
+                const structureBuildingProbes = constructingProbes * structureBuildingFraction;
+                if (structureBuildingProbes > 0) {
+                    // Apply research bonuses for building rate
+                    const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
+                    const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
+                    const structureConstructionRateKgS = structureBuildingProbes * effectiveBuildRate;
                 // Structure construction uses buildEnergyThrottle (not overall energyThrottle)
                 const structureConstructionRateKgSThrottled = structureConstructionRateKgS * buildEnergyThrottle;
                 structureMetalConsumptionRate = structureConstructionRateKgSThrottled;
@@ -700,6 +737,7 @@ class GameEngine {
                 this.zoneMassRemaining[zoneId] = Math.max(0, this.zoneMassRemaining[zoneId]);
                 
                 // Produce slag proportional to mass mined (non-metal portion)
+                const zones = this.dataLoader.orbitalZones || [];
                 const zone = zones.find(z => z.id === zoneId);
                 if (zone) {
                     const metalPercentage = zone.metal_percentage || 0.32;
@@ -716,13 +754,48 @@ class GameEngine {
         }
         
         // Update probe construction with incremental progress tracking
-        const constructAllocation = this.probeAllocations.construct || {};
-        const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
-        const probeBuildingFraction = this.buildAllocation / 100.0;
-        const probeBuildingProbes = constructingProbes * probeBuildingFraction;
+        // For probe replication, combine:
+        // 1. Direct replicate allocations from zones
+        // 2. Construct allocations that are set to replicate (based on replication_slider)
+        let totalReplicatingProbes = 0;
+        
+        // Ensure probeAllocationsByZone exists
+        if (!this.probeAllocationsByZone) {
+            this.probeAllocationsByZone = {};
+        }
+        
+        // Ensure zonePolicies exists
+        if (!this.zonePolicies) {
+            this.zonePolicies = {};
+        }
+        
+        // First, get direct replicate allocations
+        for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
+            if (zoneAllocations && zoneAllocations.replicate) {
+                const replicateAllocation = zoneAllocations.replicate || {};
+                totalReplicatingProbes += Object.values(replicateAllocation).reduce((a, b) => a + b, 0);
+            }
+        }
+        
+        // Also add construct allocations that are set to replicate (based on zone replication_slider)
+        for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
+            if (zoneAllocations && zoneAllocations.construct) {
+                const constructAllocation = zoneAllocations.construct || {};
+                const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+                if (constructingProbes > 0) {
+                    const zonePolicy = this.zonePolicies[zoneId] || {};
+                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+                    const replicateFraction = replicationSlider / 100.0; // Fraction going to replicate (0 = all construct, 100 = all replicate)
+                    totalReplicatingProbes += constructingProbes * replicateFraction;
+                }
+            }
+        }
         
         // Base build rate: 0.1 kg/s per probe
-        const baseProbeBuildRateKgS = probeBuildingProbes * Config.PROBE_BUILD_RATE;
+        // Apply research bonuses for building rate
+        const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
+        const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
+        const baseProbeBuildRateKgS = totalReplicatingProbes * effectiveBuildRate;
         
         // Apply energy throttling (build activities use buildEnergyThrottle)
         let probeBuildRateKgS = baseProbeBuildRateKgS * buildEnergyThrottle;
@@ -910,8 +983,19 @@ class GameEngine {
         }
         
         // Structure building (probes building structures using 0.1 kg/s per probe)
+        // Calculate total constructing probes across all zones
+        let totalConstructingProbes = 0;
+        if (this.probeAllocationsByZone) {
+            for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
+                if (zoneAllocations && zoneAllocations.construct) {
+                    const constructAllocation = zoneAllocations.construct || {};
+                    totalConstructingProbes += Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+                }
+            }
+        }
+        
         const structureBuildingFraction = 1.0 - (this.buildAllocation / 100.0);
-        const structureBuildingProbes = constructingProbes * structureBuildingFraction;
+        const structureBuildingProbes = totalConstructingProbes * structureBuildingFraction;
         
         if (structureBuildingProbes > 0 && this.enabledConstruction.size > 0) {
             // Base build rate: 0.1 kg/s per probe
@@ -1074,7 +1158,44 @@ class GameEngine {
             }
             
             // Calculate probes to transfer this tick
-            const probesToTransfer = transfer.rate * deltaTime;
+            let probesToTransfer = transfer.rate * deltaTime;
+            
+            // For one-time transfers, limit to remaining count
+            if (transfer.type === 'one-time') {
+                const remaining = (transfer.totalCount || transfer.count) - (transfer.progress || 0);
+                probesToTransfer = Math.min(probesToTransfer, remaining);
+                
+                // If transfer is complete, remove it
+                if (remaining <= 0.001) {
+                    this.activeTransfers.splice(i, 1);
+                    continue;
+                }
+            }
+            
+            // Process arrivals for continuous transfers (probes arriving at destination)
+            if (transfer.type === 'continuous' && transfer.inTransit && transfer.inTransit.length > 0) {
+                const currentTime = this.time;
+                let totalArriving = 0;
+                
+                // Check for probes that have arrived
+                transfer.inTransit = transfer.inTransit.filter(transit => {
+                    if (transit.arrivalTime <= currentTime) {
+                        totalArriving += transit.count;
+                        return false; // Remove from transit
+                    }
+                    return true; // Keep in transit
+                });
+                
+                // Add arriving probes to destination zone
+                if (totalArriving > 0) {
+                    // Ensure destination zone exists
+                    if (!(transfer.to in this.probesByZone)) {
+                        this.probesByZone[transfer.to] = {'probe': 0};
+                    }
+                    const currentTo = this.probesByZone[transfer.to].probe || 0;
+                    this.probesByZone[transfer.to].probe = currentTo + totalArriving;
+                }
+            }
             
             // Get available probes in source zone
             const sourceProbes = this.probesByZone[transfer.from] || {};
@@ -1086,34 +1207,168 @@ class GameEngine {
                 continue;
             }
             
-            // Limit transfer to available probes
-            const actualTransfer = Math.min(probesToTransfer, availableProbes);
-            
-            // Calculate energy cost for this transfer
-            const energyCost = transfer.energy_cost_per_second * deltaTime;
-            
-            // Check if we have enough energy
-            if (this.energy < energyCost) {
-                // Not enough energy, skip this tick
-                continue;
-            }
-            
-            // Transfer probes
+            // Ensure zones exist in probesByZone
             if (!(transfer.from in this.probesByZone)) {
-                this.probesByZone[transfer.from] = {};
+                this.probesByZone[transfer.from] = {'probe': 0};
             }
-            this.probesByZone[transfer.from].probe = Math.max(0, (this.probesByZone[transfer.from].probe || 0) - actualTransfer);
-            
             if (!(transfer.to in this.probesByZone)) {
-                this.probesByZone[transfer.to] = {
-                    'probe': 0
-                };
+                this.probesByZone[transfer.to] = {'probe': 0};
             }
-            this.probesByZone[transfer.to].probe = (this.probesByZone[transfer.to].probe || 0) + actualTransfer;
             
-            // Consume energy
-            this.energy -= energyCost;
-            this.energy = Math.max(0, this.energy);
+            if (transfer.type === 'one-time') {
+                // Process arrivals for one-time transfers (probes arriving at destination)
+                if (transfer.inTransit && transfer.inTransit.length > 0) {
+                    const currentTime = this.time;
+                    let totalArriving = 0;
+                    
+                    // Check for probes that have arrived
+                    transfer.inTransit = transfer.inTransit.filter(transit => {
+                        if (transit.arrivalTime <= currentTime) {
+                            totalArriving += transit.count;
+                            return false; // Remove from transit
+                        }
+                        return true; // Keep in transit
+                    });
+                    
+                    // Add arriving probes to destination zone
+                    if (totalArriving > 0) {
+                        // Ensure destination zone exists
+                        if (!(transfer.to in this.probesByZone)) {
+                            this.probesByZone[transfer.to] = {'probe': 0};
+                        }
+                        const currentTo = this.probesByZone[transfer.to].probe || 0;
+                        this.probesByZone[transfer.to].probe = currentTo + totalArriving;
+                        
+                        // Update progress
+                        transfer.progress = (transfer.progress || 0) + totalArriving;
+                        
+                        // Remove transfer if complete
+                        if (transfer.progress >= transfer.totalCount) {
+                            this.activeTransfers.splice(i, 1);
+                            i--; // Adjust index after removal
+                            continue;
+                        }
+                    }
+                }
+                
+                // Initialize transit queue if not present
+                if (!transfer.inTransit) {
+                    transfer.inTransit = [];
+                }
+                
+                // Initialize energy tracking if not present (for backward compatibility)
+                if (transfer.energy_accumulated === undefined) {
+                    transfer.energy_accumulated = 0;
+                }
+                if (transfer.energy_cost_per_probe === undefined) {
+                    // Calculate energy cost per probe if not stored
+                    const zones = this.dataLoader.orbitalZones || [];
+                    const fromZoneData = zones.find(z => z.id === transfer.from);
+                    const toZoneData = zones.find(z => z.id === transfer.to);
+                    if (fromZoneData && toZoneData) {
+                        transfer.energy_cost_per_probe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
+                    } else {
+                        transfer.energy_cost_per_probe = 0;
+                    }
+                }
+                if (transfer.total_energy_needed === undefined) {
+                    transfer.total_energy_needed = transfer.energy_cost_per_probe * transfer.totalCount;
+                }
+                if (transfer.transferTime === undefined) {
+                    // Calculate transfer time if not stored
+                    const zones = this.dataLoader.orbitalZones || [];
+                    const fromZoneData = zones.find(z => z.id === transfer.from);
+                    const toZoneData = zones.find(z => z.id === transfer.to);
+                    if (fromZoneData && toZoneData) {
+                        transfer.transferTime = this._calculateTransferTime(fromZoneData, toZoneData);
+                    } else {
+                        transfer.transferTime = 0;
+                    }
+                }
+                
+                // Consume available excess energy (don't consume energy needed for other operations)
+                // For now, consume all available energy - in a more sophisticated system,
+                // we'd reserve energy for critical operations
+                const energyToConsume = Math.min(this.energy, transfer.total_energy_needed - transfer.energy_accumulated);
+                transfer.energy_accumulated += energyToConsume;
+                this.energy -= energyToConsume;
+                this.energy = Math.max(0, this.energy);
+                
+                // Calculate how many probes can be sent based on accumulated energy
+                const probesSendable = Math.floor(transfer.energy_accumulated / transfer.energy_cost_per_probe);
+                const probesRemaining = transfer.totalCount - (transfer.progress || 0);
+                const probesToSend = Math.min(probesSendable, probesRemaining, availableProbes);
+                
+                if (probesToSend > 0 && transfer.transferTime > 0) {
+                    // Remove probes from source zone immediately (they're traveling)
+                    const currentFrom = this.probesByZone[transfer.from].probe || 0;
+                    this.probesByZone[transfer.from].probe = Math.max(0, currentFrom - probesToSend);
+                    
+                    // Add probes to transit queue (they'll arrive after transferTime)
+                    const departureTime = this.time;
+                    const arrivalTime = this.time + transfer.transferTime;
+                    transfer.inTransit.push({
+                        count: probesToSend,
+                        departureTime: departureTime,
+                        arrivalTime: arrivalTime
+                    });
+                    
+                    // Consume energy for sent probes
+                    transfer.energy_accumulated -= probesToSend * transfer.energy_cost_per_probe;
+                }
+            } else {
+                // Continuous transfer: accumulate energy and send probes when enough energy is available
+                // Initialize energy tracking if not present
+                if (transfer.energy_accumulated === undefined) {
+                    transfer.energy_accumulated = 0;
+                }
+                if (transfer.energy_cost_per_probe === undefined) {
+                    // Calculate energy cost per probe if not stored
+                    const zones = this.dataLoader.orbitalZones || [];
+                    const fromZoneData = zones.find(z => z.id === transfer.from);
+                    const toZoneData = zones.find(z => z.id === transfer.to);
+                    if (fromZoneData && toZoneData) {
+                        transfer.energy_cost_per_probe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
+                    } else {
+                        transfer.energy_cost_per_probe = 0;
+                    }
+                }
+                
+                // Consume available excess energy for this transfer
+                // Try to accumulate energy at the rate needed for the transfer
+                const energyNeededPerSecond = transfer.energy_cost_per_second || 0;
+                const energyToConsume = Math.min(this.energy, energyNeededPerSecond * deltaTime);
+                transfer.energy_accumulated += energyToConsume;
+                this.energy -= energyToConsume;
+                this.energy = Math.max(0, this.energy);
+                
+                // Calculate how many probes can be sent based on accumulated energy
+                const probesSendable = Math.floor(transfer.energy_accumulated / transfer.energy_cost_per_probe);
+                // Calculate desired transfer rate for this tick
+                const desiredProbesThisTick = (transfer.rate || 0) * deltaTime;
+                const probesToSend = Math.min(probesSendable, desiredProbesThisTick, availableProbes);
+                
+                if (probesToSend > 0) {
+                    // Remove probes from source immediately
+                    const currentFrom = this.probesByZone[transfer.from].probe || 0;
+                    this.probesByZone[transfer.from].probe = Math.max(0, currentFrom - probesToSend);
+                    
+                    // Consume energy for sent probes
+                    transfer.energy_accumulated -= probesToSend * transfer.energy_cost_per_probe;
+                    
+                    // Add probes to transit queue (they'll arrive after transferTime)
+                    if (transfer.transferTime) {
+                        if (!transfer.inTransit) {
+                            transfer.inTransit = [];
+                        }
+                        const arrivalTime = this.time + transfer.transferTime;
+                        transfer.inTransit.push({
+                            count: probesToSend,
+                            arrivalTime: arrivalTime
+                        });
+                    }
+                }
+            }
         }
     }
     
@@ -1435,7 +1690,11 @@ class GameEngine {
                     }
                     
                     // Base harvest rate per probe (kg/s total material)
-                    const baseHarvestRate = Config.PROBE_HARVEST_RATE; // 1.0 kg/s per probe
+                    let baseHarvestRate = Config.PROBE_HARVEST_RATE; // 1.0 kg/s per probe
+                    
+                    // Apply research bonuses for mining rate
+                    const miningRateBonus = this._getResearchBonus('production_efficiency', 'mining_rate_multiplier', 1.0);
+                    baseHarvestRate *= miningRateBonus;
                     
                     // Apply zone-specific mining rate multiplier
                     const zoneHarvestRatePerProbe = baseHarvestRate * baseDexterity * harvestMultiplier * miningRateMultiplier;
@@ -1578,14 +1837,45 @@ class GameEngine {
         }
         
         // Manual probe building (probes building other probes) - use zone-based replicate allocations
+        // Ensure probeAllocationsByZone exists
+        if (!this.probeAllocationsByZone) {
+            this.probeAllocationsByZone = {};
+        }
+        
+        // Ensure zonePolicies exists
+        if (!this.zonePolicies) {
+            this.zonePolicies = {};
+        }
+        
         let totalReplicatingProbes = 0;
+        
+        // First, get direct replicate allocations
         for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
-            const replicateAllocation = zoneAllocations.replicate || {};
-            totalReplicatingProbes += Object.values(replicateAllocation).reduce((a, b) => a + b, 0);
+            if (zoneAllocations && zoneAllocations.replicate) {
+                const replicateAllocation = zoneAllocations.replicate || {};
+                totalReplicatingProbes += Object.values(replicateAllocation).reduce((a, b) => a + b, 0);
+            }
+        }
+        
+        // Also add construct allocations that are set to replicate (based on zone replication_slider)
+        for (const [zoneId, zoneAllocations] of Object.entries(this.probeAllocationsByZone)) {
+            if (zoneAllocations && zoneAllocations.construct) {
+                const constructAllocation = zoneAllocations.construct || {};
+                const constructingProbes = Object.values(constructAllocation).reduce((a, b) => a + b, 0);
+                if (constructingProbes > 0) {
+                    const zonePolicy = this.zonePolicies[zoneId] || {};
+                    const replicationSlider = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
+                    const replicateFraction = replicationSlider / 100.0; // Fraction going to replicate (0 = all construct, 100 = all replicate)
+                    totalReplicatingProbes += constructingProbes * replicateFraction;
+                }
+            }
         }
         
         // Manual build rate: 0.1 kg/s per probe, converted to probes/s
-        const baseManualBuildRateKgS = totalReplicatingProbes * Config.PROBE_BUILD_RATE; // 0.1 kg/s per probe
+        // Apply research bonuses for building rate
+        const buildingRateBonus = this._getResearchBonus('production_efficiency', 'building_rate_multiplier', 1.0);
+        const effectiveBuildRate = Config.PROBE_BUILD_RATE * buildingRateBonus;
+        const baseManualBuildRateKgS = totalReplicatingProbes * effectiveBuildRate; // kg/s per probe (with bonuses)
         const manualBuildRateProbesS = baseManualBuildRateKgS / factoryMetalCostPerProbe; // probes/s (theoretical)
         
         // Calculate metal production rate for limiting
@@ -2181,13 +2471,20 @@ class GameEngine {
         return idleProbes;
     }
     _checkZoneDepletion() {
+        const zones = this.dataLoader.orbitalZones || [];
         for (const [zoneId, metalRemaining] of Object.entries(this.zoneMetalRemaining)) {
-            const slagRemaining = this.zoneSlagRemaining[zoneId] || 0;
-            // Zone is depleted if both metal and slag are exhausted
-            if (metalRemaining <= 0 && slagRemaining <= 0 && !this.zoneDepleted[zoneId]) {
+            // Skip dyson zones - they don't have metal/slag to deplete
+            const zone = zones.find(z => z && z.id === zoneId);
+            if (zone && (zone.is_dyson_zone || zone.isDysonZone)) {
+                continue;
+            }
+            
+            // For regular zones, check if metal is exhausted
+            // Slag is produced from mining, not a remaining resource to check
+            if (metalRemaining <= 0 && !this.zoneDepleted[zoneId]) {
                 this.zoneDepleted[zoneId] = true;
-            } else if ((metalRemaining > 0 || slagRemaining > 0) && this.zoneDepleted[zoneId]) {
-                // Zone is no longer depleted if resources are available
+            } else if (metalRemaining > 0 && this.zoneDepleted[zoneId]) {
+                // Zone is no longer depleted if metal is available
                 this.zoneDepleted[zoneId] = false;
             }
         }
@@ -2844,6 +3141,8 @@ class GameEngine {
             return this._pauseTransfer(actionData);
         } else if (actionType === 'delete_transfer') {
             return this._deleteTransfer(actionData);
+        } else if (actionType === 'recycle_factory') {
+            return this._recycleFactory(actionData);
         } else {
             throw new Error(`Unknown action type: ${actionType}`);
         }
@@ -3255,52 +3554,79 @@ class GameEngine {
                 throw new Error(`Insufficient probes: need ${count}, have ${totalAvailable}`);
             }
             
-            // Calculate energy cost
+            // Calculate transfer time and rate for one-time transfer
             const fromZoneData = zones.find(z => z.id === fromZone);
             const toZoneData = zones.find(z => z.id === toZone);
-            const energyCost = this._calculateTransferEnergyCost(fromZoneData, toZoneData, count);
+            const transferTime = this._calculateTransferTime(fromZoneData, toZoneData);
             
-            // Check energy availability
-            if (this.energy < energyCost) {
-                throw new Error(`Insufficient energy: need ${(energyCost/1000).toFixed(1)} kW, have ${(this.energy/1000).toFixed(1)} kW`);
+            // Calculate rate needed to transfer all probes over the transfer time
+            const transferRate = count / transferTime; // probes per second
+            
+            // Calculate energy cost per probe
+            const energyCostPerProbe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
+            const totalEnergyCost = energyCostPerProbe * count;
+            
+            // Allow transfers even with insufficient energy - they'll consume energy incrementally
+            // No upfront energy check - transfers will proceed as energy becomes available
+            
+            // Create one-time transfer that will be processed over time
+            if (!this.activeTransfers) {
+                this.activeTransfers = [];
             }
             
-            // Transfer probes (move from source to destination)
-            // For now, transfer 'probe' type only
-            const probesToTransfer = Math.min(count, sourceProbes.probe || 0);
-            if (probesToTransfer > 0) {
-                // Remove from source
-                if (!(fromZone in this.probesByZone)) {
-                    this.probesByZone[fromZone] = {};
-                }
-                this.probesByZone[fromZone].probe = Math.max(0, (this.probesByZone[fromZone].probe || 0) - probesToTransfer);
-                
-                // Add to destination
-                if (!(toZone in this.probesByZone)) {
-                    this.probesByZone[toZone] = {
-                        'probe': 0,
-                        'miner_probe': 0,
-                        'compute_probe': 0,
-                        'energy_probe': 0,
-                        'construction_probe': 0
-                    };
-                }
-                this.probesByZone[toZone].probe = (this.probesByZone[toZone].probe || 0) + probesToTransfer;
-                
-                // Update legacy probe counts
-                this.probes.probe = (this.probes.probe || 0) - probesToTransfer + probesToTransfer; // Net zero change globally
-            }
+            const transferId = Date.now() + Math.random();
+            const transfer = {
+                id: transferId,
+                from: fromZone,
+                to: toZone,
+                type: 'one-time',
+                count: count,
+                rate: transferRate,
+                progress: 0,
+                totalCount: count,
+                transferTime: transferTime, // Store transfer time for transit tracking
+                energy_cost_per_probe: energyCostPerProbe,
+                total_energy_needed: totalEnergyCost,
+                energy_accumulated: 0, // Track energy accumulated for this transfer
+                energy_cost_per_second: energyCostPerProbe * transferRate,
+                paused: false,
+                startTime: this.time, // Use game time, not Date.now()
+                inTransit: [] // Probes currently in transit: [{count, departureTime, arrivalTime}]
+            };
             
-            // Consume energy
-            this.energy -= energyCost;
-            this.energy = Math.max(0, this.energy);
+            this.activeTransfers.push(transfer);
             
-            return {'success': true, 'transferred': probesToTransfer, 'energy_cost': energyCost};
+            // Add to history
+            this.transferHistory.push({
+                'from': fromZone,
+                'to': toZone,
+                'type': 'one-time',
+                'count': count,
+                'time': this.time
+            });
+            
+            return {'success': true, 'transfer_id': transferId, 'transfer_rate': transferRate, 'transfer_time': transferTime};
         } else {
-            // Continuous transfer
-            if (rate <= 0) {
-                throw new Error('Transfer rate must be greater than 0');
+            // Continuous transfer - rate is percentage of probe production rate in source zone
+            if (rate <= 0 || rate > 100) {
+                throw new Error('Transfer rate must be between 0 and 100 (percentage of probe production)');
             }
+            
+            // Calculate probe production rate in source zone
+            const [probeProductionRates] = this._calculateProbeProduction();
+            const totalProbeProductionRate = Object.values(probeProductionRates).reduce((a, b) => a + b, 0); // probes per second
+            
+            // Calculate actual transfer rate as percentage of production
+            const actualTransferRate = (totalProbeProductionRate * rate) / 100.0; // probes per second
+            
+            // Calculate transfer time to determine arrival rate
+            const fromZoneData = zones.find(z => z.id === fromZone);
+            const toZoneData = zones.find(z => z.id === toZone);
+            const transferTime = this._calculateTransferTime(fromZoneData, toZoneData);
+            
+            // The rate at which probes are sent is actualTransferRate
+            // But probes arrive at destination after transferTime delay
+            // So we need to account for this in the transfer processing
             
             // Store continuous transfer (will be processed in tick)
             if (!this.activeTransfers) {
@@ -3308,19 +3634,21 @@ class GameEngine {
             }
             
             // Calculate energy cost per second
-            const fromZoneData = zones.find(z => z.id === fromZone);
-            const toZoneData = zones.find(z => z.id === toZone);
             const energyCostPerProbe = this._calculateTransferEnergyCost(fromZoneData, toZoneData, 1);
-            const energyCostPerSecond = energyCostPerProbe * rate;
+            const energyCostPerSecond = energyCostPerProbe * actualTransferRate;
             
             const transferId = Date.now() + Math.random();
             const transfer = {
                 id: transferId,
                 from: fromZone,
                 to: toZone,
-                rate: rate,
+                type: 'continuous',
+                rate: actualTransferRate, // probes per second (actual rate, not percentage)
+                ratePercentage: rate, // store original percentage
+                transferTime: transferTime, // time for probes to arrive
                 energy_cost_per_second: energyCostPerSecond,
-                paused: false
+                paused: false,
+                inTransit: [] // probes currently in transit: [{count, arrivalTime}]
             };
             
             this.activeTransfers.push(transfer);
@@ -3336,8 +3664,81 @@ class GameEngine {
                 startTime: Date.now()
             });
             
-            return {'success': true, 'transfer_id': transferId, 'transfer_rate': rate, 'energy_cost_per_second': energyCostPerSecond};
+            return {'success': true, 'transfer_id': transferId, 'transfer_rate': actualTransferRate, 'energy_cost_per_second': energyCostPerSecond};
         }
+    }
+    
+    _calculateTotalProbes() {
+        // Calculate total probes across all zones
+        let totalProbes = 0;
+        for (const zoneId in this.probesByZone) {
+            const zoneProbes = this.probesByZone[zoneId] || {};
+            for (const probeType in zoneProbes) {
+                totalProbes += zoneProbes[probeType] || 0;
+            }
+        }
+        return {'probe': totalProbes};
+    }
+    
+    _calculateTransferTime(fromZone, toZone) {
+        // Base transfer time between dyson and mercury: 3e3 seconds (3000 seconds)
+        const BASE_TRANSFER_TIME = 3e3; // seconds
+        
+        // Get zone IDs
+        const fromZoneId = fromZone.id || '';
+        const toZoneId = toZone.id || '';
+        
+        // Check if this is dyson to mercury or vice versa
+        const isDysonToMercury = (fromZoneId === 'dyson_sphere' && toZoneId === 'mercury') ||
+                                 (fromZoneId === 'mercury' && toZoneId === 'dyson_sphere');
+        
+        if (isDysonToMercury) {
+            // Base case: use 3e3 seconds
+            let transferTime = BASE_TRANSFER_TIME;
+            
+            // Apply research bonuses for propulsion
+            const specificImpulseBonus = this._getResearchBonus('propulsion_systems', 'specific_impulse_improvement', 0.0);
+            const propulsionEfficiency = this._getResearchBonus('propulsion_systems', 'ultimate_propulsion_efficiency', 0.0);
+            const speedMultiplier = 1.0 + specificImpulseBonus + propulsionEfficiency;
+            
+            // Faster probes = shorter transfer time
+            transferTime = transferTime / speedMultiplier;
+            
+            return transferTime;
+        }
+        
+        // For other transfers, scale based on distance and delta-v
+        const r1 = (fromZone.radius_km || fromZone.radius_au * 149597870.7) || 149597870.7; // km
+        const r2 = (toZone.radius_km || toZone.radius_au * 149597870.7) || 149597870.7; // km
+        
+        // Calculate distance ratio relative to dyson-mercury distance
+        const dysonRadius = 30000000; // km (0.2 AU)
+        const mercuryRadius = 58000000; // km (0.39 AU)
+        const baseDistance = Math.abs(mercuryRadius - dysonRadius);
+        const actualDistance = Math.abs(r2 - r1);
+        const distanceRatio = actualDistance / baseDistance;
+        
+        // Calculate delta-v ratio
+        const r1_au = fromZone.radius_au || (r1 / 149597870.7);
+        const r2_au = toZone.radius_au || (r2 / 149597870.7);
+        const radiusRatio = Math.max(r1_au, r2_au) / Math.min(r1_au, r2_au);
+        const deltaV = 30.0 * Math.sqrt(radiusRatio) * 0.5; // km/s
+        
+        const baseDeltaV = 30.0 * Math.sqrt(mercuryRadius / dysonRadius) * 0.5;
+        const deltaVRatio = deltaV / baseDeltaV;
+        
+        // Scale transfer time: base time * distance ratio * delta-v ratio
+        let transferTime = BASE_TRANSFER_TIME * distanceRatio * deltaVRatio;
+        
+        // Apply research bonuses for propulsion
+        const specificImpulseBonus = this._getResearchBonus('propulsion_systems', 'specific_impulse_improvement', 0.0);
+        const propulsionEfficiency = this._getResearchBonus('propulsion_systems', 'ultimate_propulsion_efficiency', 0.0);
+        const speedMultiplier = 1.0 + specificImpulseBonus + propulsionEfficiency;
+        
+        // Faster probes = shorter transfer time
+        transferTime = transferTime / speedMultiplier;
+        
+        return transferTime;
     }
     
     _calculateTransferEnergyCost(fromZone, toZone, probeCount) {
@@ -3551,13 +3952,31 @@ class GameEngine {
         
         return {'success': true, 'category': category, 'enabled': enabled, 'toggled_count': toggledCount};
     }
-    recycleFactory(factoryId) {
-        if (!(factoryId in this.structures)) {
-            throw new Error(`Factory ${factoryId} not found`);
+    _recycleFactory(actionData) {
+        const factoryId = actionData.factory_id;
+        const zoneId = actionData.zone_id;
+        
+        if (!factoryId) {
+            throw new Error('factory_id is required');
+        }
+        if (!zoneId) {
+            throw new Error('zone_id is required');
         }
         
-        if (this.structures[factoryId] <= 0) {
-            throw new Error(`No factories of type ${factoryId} to recycle`);
+        // Validate zone exists
+        const zones = this.dataLoader.orbitalZones || [];
+        const zoneIds = zones.map(z => z.id);
+        if (!zoneIds.includes(zoneId)) {
+            throw new Error(`Invalid zone_id: ${zoneId}`);
+        }
+        
+        // Check if factory exists in zone
+        if (!this.structuresByZone[zoneId] || !(factoryId in this.structuresByZone[zoneId])) {
+            throw new Error(`Factory ${factoryId} not found in zone ${zoneId}`);
+        }
+        
+        if (this.structuresByZone[zoneId][factoryId] <= 0) {
+            throw new Error(`No factories of type ${factoryId} to recycle in zone ${zoneId}`);
         }
         
         // Get factory data
@@ -3578,10 +3997,18 @@ class GameEngine {
         this.metal += metalReturned;
         this.slag += slagProduced;
         
-        // Remove factory
-        this.structures[factoryId] -= 1;
-        if (this.structures[factoryId] <= 0) {
-            delete this.structures[factoryId];
+        // Remove factory from zone
+        this.structuresByZone[zoneId][factoryId] -= 1;
+        if (this.structuresByZone[zoneId][factoryId] <= 0) {
+            delete this.structuresByZone[zoneId][factoryId];
+        }
+        
+        // Legacy: also update global structure count if it exists
+        if (factoryId in this.structures) {
+            this.structures[factoryId] = Math.max(0, (this.structures[factoryId] || 0) - 1);
+            if (this.structures[factoryId] <= 0) {
+                delete this.structures[factoryId];
+            }
         }
         
         return {
@@ -3590,6 +4017,11 @@ class GameEngine {
             'energy_returned': 0,
             'slag_produced': slagProduced
         };
+    }
+    
+    // Legacy method - kept for backward compatibility but now calls _recycleFactory
+    recycleFactory(factoryId, zoneId) {
+        return this._recycleFactory({ factory_id: factoryId, zone_id: zoneId });
     }
     
     async setZonePolicy(zoneId, policyKey, value) {
@@ -3630,6 +4062,7 @@ class GameEngineClient {
         
         // Use fixed interval: tick at exactly 60 ticks per second (every ~16.67ms)
         const tickIntervalMs = 1000 / this.tickRate; // ~16.67ms for 60 ticks/sec
+        console.log('Starting game tick interval:', tickIntervalMs, 'ms, tickRate:', this.tickRate);
         this.tickInterval = setInterval(() => this.tick(), tickIntervalMs);
         
         // Start auto-save
@@ -3662,20 +4095,29 @@ class GameEngineClient {
             return;
         }
         
+        const gameState = this.engine.getState();
+        
+        // Save to IndexedDB (local storage)
         try {
-            // Initialize storage if needed
-            if (typeof gameStorage === 'undefined') {
-                console.warn('GameStorage not available');
-                return;
+            if (typeof gameStorage !== 'undefined') {
+                await gameStorage.init();
+                await gameStorage.saveGameState(this.sessionId, gameState);
+                console.log('Game state saved locally');
             }
-            
-            await gameStorage.init();
-            const gameState = this.engine.getState();
-            await gameStorage.saveGameState(this.sessionId, gameState);
-            console.log('Game state saved locally');
         } catch (error) {
-            console.error('Failed to save game state:', error);
-            throw error;
+            console.error('Failed to save game state locally:', error);
+            // Continue even if local save fails
+        }
+        
+        // Save to backend (cloud sync) - only if sessionId is not 'local'
+        if (this.sessionId && this.sessionId !== 'local' && typeof api !== 'undefined') {
+            try {
+                await api.saveGameState(this.sessionId, gameState);
+                console.log('Game state saved to backend');
+            } catch (error) {
+                // Log warning but don't throw - backend save is optional
+                console.warn('Failed to save game state to backend (continuing with local save):', error);
+            }
         }
     }
     
@@ -3717,19 +4159,41 @@ class GameEngineClient {
     }
 
     tick() {
-        if (!this.isRunning || !this.engine) {
+        if (!this.isRunning) {
+            return;
+        }
+        
+        if (!this.engine) {
+            console.warn('GameEngineClient.tick(): engine is null');
             return;
         }
 
-        // Always tick at fixed rate (60 ticks/second)
-        // Time speed is applied to delta_time, not tick rate
-        const effectiveDeltaTime = this.deltaTime * this.timeSpeed;
-        
-        // Execute single tick with time-scaled delta_time
-        this.engine.tick(effectiveDeltaTime);
-        
-        // Emit game state update event
-        this.updateGameState(this.engine.getState());
+        try {
+            // Always tick at fixed rate (60 ticks/second)
+            // Time speed is applied to delta_time, not tick rate
+            const effectiveDeltaTime = this.deltaTime * this.timeSpeed;
+            
+            // Ensure effectiveDeltaTime is valid
+            if (!effectiveDeltaTime || effectiveDeltaTime <= 0 || isNaN(effectiveDeltaTime) || !isFinite(effectiveDeltaTime)) {
+                console.warn('Invalid effectiveDeltaTime:', effectiveDeltaTime, 'deltaTime:', this.deltaTime, 'timeSpeed:', this.timeSpeed);
+                return;
+            }
+            
+            // Execute single tick with time-scaled delta_time
+            this.engine.tick(effectiveDeltaTime);
+            
+            // Emit game state update event
+            const gameState = this.engine.getState();
+            if (gameState) {
+                this.updateGameState(gameState);
+            } else {
+                console.warn('GameEngineClient.tick(): getState() returned null/undefined');
+            }
+        } catch (error) {
+            console.error('Error in game tick:', error);
+            console.error('Error stack:', error.stack);
+            // Don't stop the game, but log the error
+        }
     }
 
     updateGameState(newState) {
@@ -3737,7 +4201,7 @@ class GameEngineClient {
         window.dispatchEvent(new CustomEvent('gameStateUpdate', { detail: newState }));
     }
 
-    performAction(actionType, actionData) {
+    async performAction(actionType, actionData) {
         if (!this.engine) {
             throw new Error('No active game engine');
         }
@@ -3746,10 +4210,10 @@ class GameEngineClient {
             const result = this.engine.performAction(actionType, actionData);
             // Update UI with new state
             this.updateGameState(this.engine.getState());
-            return { success: true, game_state: this.engine.getState(), result: result };
+            return Promise.resolve({ success: true, game_state: this.engine.getState(), result: result });
         } catch (error) {
             console.error('Action failed:', error);
-            throw error;
+            return Promise.reject(error);
         }
     }
 
@@ -3800,8 +4264,15 @@ class GameEngineClient {
     }
 }
 
-// Export singleton instance
+// Export singleton instance - runs entirely locally in JavaScript
+// All time calculations, ticks, and game logic happen client-side
 const gameEngine = new GameEngineClient();
+
+// Expose globally for access from other scripts
+if (typeof window !== 'undefined') {
+    window.gameEngine = gameEngine;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { GameEngine, GameEngineClient };
 }

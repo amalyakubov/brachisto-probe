@@ -8,7 +8,12 @@ game_bp = Blueprint('game', __name__)
 
 @game_bp.route('/start', methods=['POST'])
 def start_game():
-    """Start a new game session (guest mode allowed)."""
+    """Start a new game session (guest mode allowed).
+    
+    NOTE: Python GameEngine is used ONLY for initialization to generate the initial game state.
+    All runtime game logic (ticks, production, building, etc.) runs locally in JavaScript.
+    After initialization, the backend only stores and retrieves game state snapshots.
+    """
     data = request.get_json() or {}
     config = data.get('config', {})
     
@@ -25,7 +30,8 @@ def start_game():
     db.session.add(session)
     db.session.commit()
     
-    # Initialize game engine
+    # Initialize game engine (INITIALIZATION ONLY - not for runtime logic)
+    # This generates the initial game state with starting resources, probes, etc.
     engine = GameEngine(session.id, config)
     game_state = engine.get_state()
     
@@ -40,7 +46,11 @@ def start_game():
 
 @game_bp.route('/state/<int:session_id>', methods=['GET'])
 def get_game_state(session_id):
-    """Get current game state (guest mode allowed)."""
+    """Get current game state (guest mode allowed).
+    
+    NOTE: This endpoint returns the saved game state directly from the database.
+    It does NOT execute any game logic - all game logic runs locally in JavaScript.
+    """
     session = GameSession.query.get_or_404(session_id)
     
     # Verify ownership if authenticated
@@ -48,11 +58,8 @@ def get_game_state(session_id):
         if session.user_id and session.user_id != g.current_user.id:
             return jsonify({'error': 'Unauthorized'}), 403
     
-    # Load engine and get state
-    engine = GameEngine.load_from_session(session)
-    game_state = engine.get_state()
-    
-    return jsonify({'game_state': game_state})
+    # Return saved game state directly (no game logic execution)
+    return jsonify({'game_state': session.game_state or {}})
 
 @game_bp.route('/save', methods=['POST'])
 def save_game():
@@ -104,53 +111,23 @@ def tick_game():
 
 @game_bp.route('/recycle_factory', methods=['POST'])
 def recycle_factory():
-    """Recycle a factory in a depleted zone (guest mode allowed)."""
-    data = request.get_json()
+    """Recycle a factory (DEPRECATED - recycling now handled locally in JavaScript).
     
-    if not data or not data.get('session_id'):
-        return jsonify({'error': 'Missing session_id'}), 400
-    
-    session = GameSession.query.get_or_404(data['session_id'])
-    
-    # Verify ownership if authenticated
-    if session.user_id != g.current_user.id:
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    # Load engine
-    engine = GameEngine.load_from_session(session)
-    
-    factory_id = data.get('factory_id')
-    zone_id = data.get('zone_id')
-    
-    try:
-        result = engine.recycle_factory(factory_id, zone_id)
-        
-        # Record action
-        build_seq = BuildSequence(
-            session_id=session.id,
-            action_type='recycle_factory',
-            action_data={'factory_id': factory_id, 'zone_id': zone_id},
-            timestamp=engine.get_time(),
-            tick_number=engine.tick_count
-        )
-        db.session.add(build_seq)
-        
-        # Save game state
-        session.game_state = engine.get_state()
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'game_state': engine.get_state(),
-            'result': result
-        })
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
+    This endpoint is kept for backward compatibility but is no longer used.
+    Factory recycling is now performed locally in the browser via the JavaScript game engine.
+    """
+    return jsonify({
+        'error': 'Deprecated',
+        'message': 'This endpoint is deprecated. Factory recycling is now handled locally in JavaScript.'
+    }), 410  # 410 Gone
 
 @game_bp.route('/complete', methods=['POST'])
 def complete_game():
-    """Mark game session as complete and calculate score (guest mode allowed)."""
+    """Mark game session as complete and calculate score (guest mode allowed).
+    
+    NOTE: This endpoint calculates final stats from the saved game_state directly.
+    It does NOT execute any game logic - all game logic runs locally in JavaScript.
+    """
     data = request.get_json()
     
     if not data or not data.get('session_id'):
@@ -163,17 +140,22 @@ def complete_game():
         if session.user_id and session.user_id != g.current_user.id:
             return jsonify({'error': 'Unauthorized'}), 403
     
-    # Load engine
-    engine = GameEngine.load_from_session(session)
-    
-    # Calculate final stats
+    # Calculate final stats from saved game state (no game logic execution)
     from datetime import datetime
     elapsed_time = (datetime.utcnow() - session.started_at).total_seconds()
     
+    game_state = session.game_state or {}
+    
+    # Calculate total metal remaining from game state
+    zone_metal_remaining = game_state.get('zone_metal_remaining', {})
+    if isinstance(zone_metal_remaining, dict):
+        total_metal_remaining = sum(zone_metal_remaining.values())
+    else:
+        total_metal_remaining = 0.0
+    
     session.completed_at = datetime.utcnow()
     session.final_time = elapsed_time
-    session.remaining_metal = engine.get_total_metal_remaining()
-    session.game_state = engine.get_state()
+    session.remaining_metal = total_metal_remaining
     
     # Create score
     from backend.models import Score
@@ -181,7 +163,7 @@ def complete_game():
         user_id=session.user_id,
         session_id=session.id,
         completion_time=elapsed_time,
-        remaining_metal=session.remaining_metal
+        remaining_metal=total_metal_remaining
     )
     score.calculate_score_value()
     

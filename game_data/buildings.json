@@ -28,7 +28,7 @@
           "asteroid_belt": 0.9
         },
         "effects": {
-          "energy_consumption_per_second": 20,
+          "energy_consumption_per_second": 20000,
           "energy_per_probe_kw": 100,
           "probes_per_second": 0.2,
           "metal_per_probe": 8.0
@@ -56,7 +56,7 @@
           "asteroid_belt": 0.9
         },
         "effects": {
-          "energy_consumption_per_second": 80,
+          "energy_consumption_per_second": 80000,
           "energy_per_probe_kw": 80,
           "probes_per_second": 1.0,
           "metal_per_probe": 6.0
@@ -84,7 +84,7 @@
           "asteroid_belt": 1.0
         },
         "effects": {
-          "energy_consumption_per_second": 250,
+          "energy_consumption_per_second": 250000,
           "energy_per_probe_kw": 50,
           "probes_per_second": 5.0,
           "metal_per_probe": 5.0
@@ -112,7 +112,7 @@
           "asteroid_belt": 1.0
         },
         "effects": {
-          "energy_consumption_per_second": 400,
+          "energy_consumption_per_second": 400000,
           "energy_per_probe_kw": 20,
           "probes_per_second": 20.0,
           "metal_per_probe": 4.0
@@ -142,7 +142,7 @@
         },
         "effects": {
           "structure_build_rate_multiplier": 1.5,
-          "energy_consumption_per_second": 4000,
+          "energy_consumption_per_second": 4000000,
           "energy_per_probe_kw": 40,
           "probes_per_second": 100.0,
           "metal_per_probe": 3.0
@@ -171,7 +171,7 @@
         "effects": {
           "structure_build_rate_multiplier": 2.5,
           "parallel_assembly_lines": true,
-          "energy_consumption_per_second": 35000,
+          "energy_consumption_per_second": 35000000,
           "energy_per_probe_kw": 35,
           "probes_per_second": 1000.0,
           "metal_per_probe": 2.5
@@ -200,7 +200,7 @@
         "effects": {
           "structure_build_rate_multiplier": 3.0,
           "specialized_production_lines": true,
-          "energy_consumption_per_second": 300000,
+          "energy_consumption_per_second": 300000000,
           "energy_per_probe_kw": 30,
           "probes_per_second": 10000.0,
           "metal_per_probe": 2.2
@@ -225,7 +225,7 @@
         "effects": {
           "structure_build_rate_multiplier": 4.0,
           "logistics_coordination_bonus": 0.5,
-          "energy_consumption_per_second": 2000000,
+          "energy_consumption_per_second": 2000000000,
           "energy_per_probe_kw": 20,
           "probes_per_second": 100000.0,
           "metal_per_probe": 2.1
@@ -248,7 +248,7 @@
         "effects": {
           "structure_build_rate_multiplier": 8.0,
           "planetary_coordination": true,
-          "energy_consumption_per_second": 10000000,
+          "energy_consumption_per_second": 10000000000,
           "energy_per_probe_kw": 20,
           "probes_per_second": 500000.0,
           "metal_per_probe": 2.05
@@ -272,7 +272,7 @@
           "structure_build_rate_multiplier": 15.0,
           "system_wide_coordination": true,
           "distributed_manufacturing": 0.7,
-          "energy_consumption_per_second": 20000000,
+          "energy_consumption_per_second": 20000000000,
           "energy_per_probe_kw": 20,
           "probes_per_second": 1000000.0,
           "metal_per_probe": 2.0
@@ -305,7 +305,7 @@
           "probe_production_rate_multiplier": 3.0,
           "structure_build_rate_multiplier": 1.2,
           "modular_redeployment": true,
-          "energy_consumption_per_second": 250
+          "energy_consumption_per_second": 250000
         },
         "prerequisites": []
       },
@@ -332,7 +332,7 @@
           "intelligence_production_per_second": 1000,
           "research_speed_multiplier": 2.0,
           "coordination_bonus": 0.3,
-          "energy_consumption_per_second": 1500
+          "energy_consumption_per_second": 1500000
         },
         "prerequisites": []
       },
@@ -356,7 +356,7 @@
           "intelligence_production_per_second": 800,
           "research_speed_multiplier": 2.5,
           "multi_track_research_bonus": 0.4,
-          "energy_consumption_per_second": 1200
+          "energy_consumption_per_second": 1200000
         },
         "prerequisites": []
       },
@@ -384,7 +384,7 @@
           "communication_range": "system_wide",
           "coordination_efficiency": 0.5,
           "data_transfer_speed_multiplier": 5.0,
-          "energy_consumption_per_second": 800
+          "energy_consumption_per_second": 800000
         },
         "prerequisites": []
       },
@@ -409,7 +409,7 @@
           "intelligence_production_per_second": 1500,
           "research_speed_multiplier": 3.0,
           "data_processing_bonus": 0.4,
-          "energy_consumption_per_second": 2000
+          "energy_consumption_per_second": 2000000
         },
         "prerequisites": []
       },
@@ -433,7 +433,7 @@
           "research_speed_multiplier": 5.0,
           "quantum_simulation_bonus": 0.6,
           "research_parallelization": 0.5,
-          "energy_consumption_per_second": 5000
+          "energy_consumption_per_second": 5000000
         },
         "prerequisites": []
       }
@@ -460,7 +460,7 @@
         },
         "effects": {
           "metal_production_per_second": 10,
-          "energy_consumption_per_second": 50
+          "energy_consumption_per_second": 50000
         },
         "prerequisites": []
       },
@@ -486,7 +486,7 @@
         "effects": {
           "mining_efficiency_multiplier": 1.3,
           "resource_transport_cost_reduction": 0.3,
-          "energy_consumption_per_second": 150
+          "energy_consumption_per_second": 150000
         },
         "prerequisites": []
       },
@@ -512,7 +512,7 @@
         "effects": {
           "metal_refinement_rate": 200,
           "slag_production_reduction": 0.2,
-          "energy_consumption_per_second": 100
+          "energy_consumption_per_second": 100000
         },
         "prerequisites": []
       },
@@ -539,7 +539,7 @@
           "metal_refinement_rate": 1000,
           "slag_production_reduction": 0.5,
           "refinement_efficiency": 0.4,
-          "energy_consumption_per_second": 400
+          "energy_consumption_per_second": 400000
         },
         "prerequisites": []
       },
@@ -558,7 +558,7 @@
           "metal_production_per_second": 5000,
           "dexterity_multiplier_mining": 3.0,
           "planetary_scale_mining": true,
-          "energy_consumption_per_second": 1500
+          "energy_consumption_per_second": 1500000
         },
         "prerequisites": []
       },
@@ -577,7 +577,7 @@
           "metal_production_per_second": 4000,
           "asteroid_processing_rate": 10,
           "slag_production_reduction": 0.3,
-          "energy_consumption_per_second": 800
+          "energy_consumption_per_second": 800000
         },
         "prerequisites": []
       },
@@ -605,7 +605,7 @@
           "dexterity_multiplier_mining": 5.0,
           "molecular_level_extraction": true,
           "waste_elimination": 0.8,
-          "energy_consumption_per_second": 5000
+          "energy_consumption_per_second": 5000000
         },
         "prerequisites": []
       },
@@ -624,7 +624,7 @@
           "metal_production_per_second": 8000,
           "asteroid_to_material_conversion": true,
           "conversion_efficiency": 0.9,
-          "energy_consumption_per_second": 3000
+          "energy_consumption_per_second": 3000000
         },
         "prerequisites": []
       },
@@ -645,7 +645,7 @@
           "metal_production_per_second": 3000,
           "hydrogen_production_per_second": 10000,
           "gas_extraction_rate": 5000,
-          "energy_consumption_per_second": 2000
+          "energy_consumption_per_second": 2000000
         },
         "prerequisites": []
       },
@@ -670,7 +670,7 @@
           "ice_extraction_rate": 2000,
           "hydrogen_production_per_second": 1500,
           "oxygen_production_per_second": 1200,
-          "energy_consumption_per_second": 400
+          "energy_consumption_per_second": 400000
         },
         "prerequisites": []
       },
@@ -696,7 +696,7 @@
           "hydrogen_production_per_second": 3000,
           "organic_material_production": 1000,
           "volatile_extraction_rate": 4000,
-          "energy_consumption_per_second": 800
+          "energy_consumption_per_second": 800000
         },
         "prerequisites": []
       },
@@ -715,7 +715,7 @@
           "material_transport_cost_reduction": 0.5,
           "transport_capacity_per_second": 10000,
           "asteroid_belt_access_bonus": 0.4,
-          "energy_consumption_per_second": 1200
+          "energy_consumption_per_second": 1200000
         },
         "prerequisites": []
       },
@@ -743,7 +743,7 @@
           "slag_production_reduction": 0.7,
           "refinement_efficiency": 0.6,
           "purity_bonus": 0.5,
-          "energy_consumption_per_second": 1500
+          "energy_consumption_per_second": 1500000
         },
         "prerequisites": []
       },
@@ -795,7 +795,7 @@
           "orbital_transfer_cost_reduction": 0.95,
           "material_transport_capacity": 1000000,
           "mining_efficiency_multiplier": 1.5,
-          "energy_consumption_per_second": 5000
+          "energy_consumption_per_second": 5000000
         },
         "prerequisites": []
       },
@@ -818,7 +818,7 @@
           "gas_extraction_rate": 20000,
           "hydrogen_production_per_second": 15000,
           "volatile_production_per_second": 5000,
-          "energy_consumption_per_second": 3000
+          "energy_consumption_per_second": 3000000
         },
         "prerequisites": []
       },
@@ -854,7 +854,7 @@
         "effects": {
           "orbital_transfer_cost_reduction": 0.85,
           "material_transport_rate": 50000,
-          "energy_consumption_per_second": 2000
+          "energy_consumption_per_second": 2000000
         },
         "prerequisites": []
       },
@@ -873,7 +873,7 @@
           "metal_production_per_second": 5000,
           "energy_to_mining_efficiency": 0.3,
           "mining_energy_cost_reduction": 0.8,
-          "energy_consumption_per_second": 10000
+          "energy_consumption_per_second": 10000000
         },
         "prerequisites": []
       },
@@ -892,7 +892,7 @@
           "metal_production_per_second": 4000,
           "atmospheric_extraction_rate": 15000,
           "compression_efficiency": 0.7,
-          "energy_consumption_per_second": 4000
+          "energy_consumption_per_second": 4000000
         },
         "prerequisites": []
       }
@@ -922,8 +922,8 @@
           "saturn": 0.011
         },
         "effects": {
-          "energy_production_per_second": 100,
-          "base_energy_at_earth": 100
+          "energy_production_per_second": 100000,
+          "base_energy_at_earth": 100000
         },
         "prerequisites": []
       },
@@ -947,7 +947,7 @@
           "asteroid_belt": 1.0
         },
         "effects": {
-          "energy_production_per_second": 1000,
+          "energy_production_per_second": 1000000,
           "constant_output": true
         },
         "prerequisites": []
@@ -976,7 +976,7 @@
           "saturn": 1.0
         },
         "effects": {
-          "energy_production_per_second": 5000,
+          "energy_production_per_second": 5000000,
           "constant_output": true,
           "fuel_efficiency_multiplier": 2.0
         },
@@ -1000,7 +1000,7 @@
           "mars": 1.0
         },
         "effects": {
-          "energy_production_per_second": 50000,
+          "energy_production_per_second": 50000000,
           "constant_output": true,
           "antimatter_efficiency": 0.4
         },
@@ -1022,7 +1022,7 @@
           "earth": 1.0
         },
         "effects": {
-          "energy_production_per_second": 200000,
+          "energy_production_per_second": 200000000,
           "constant_output": true,
           "zpe_efficiency": 0.1
         },
@@ -1051,7 +1051,7 @@
           "orbital_transfer_cost_reduction": 0.6,
           "material_transport_capacity": 5000,
           "solar_wind_propulsion": true,
-          "energy_consumption_per_second": 300
+          "energy_consumption_per_second": 300000
         },
         "prerequisites": []
       },
@@ -1079,7 +1079,7 @@
           "material_transport_capacity": 20000,
           "regular_service_routes": true,
           "logistics_efficiency": 0.5,
-          "energy_consumption_per_second": 600
+          "energy_consumption_per_second": 600000
         },
         "prerequisites": []
       },
@@ -1099,7 +1099,7 @@
           "material_transport_capacity": 100000,
           "network_coordination": true,
           "logistics_efficiency": 0.8,
-          "energy_consumption_per_second": 2000
+          "energy_consumption_per_second": 2000000
         },
         "prerequisites": []
       }
@@ -1115,7 +1115,7 @@
           "base_cost_energy": 50,
           "base_dexterity": 1.0,
           "base_intelligence": 0.1,
-          "energy_consumption_per_second": 1.0,
+          "energy_consumption_per_second": 1000,
           "effects": {
             "harvest_capability": true,
             "construction_capability": true,

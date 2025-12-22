@@ -112,15 +112,19 @@ class ProbeSummaryPanel {
         this.gameState = gameState;
 
         // Calculate total probes - sum across all zones
+        // Use zone-based probe counts (probesByZone) as the source of truth
+        // Legacy probes object is kept for backward compatibility but should not be counted
         let totalProbes = 0;
-        // Legacy: global probe counts
-        totalProbes += Object.values(gameState.probes || {}).reduce((sum, count) => sum + (count || 0), 0);
-        // Zone-based probe counts
         const probesByZone = gameState.probes_by_zone || {};
         for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
             if (zoneProbes && typeof zoneProbes === 'object') {
                 totalProbes += Object.values(zoneProbes).reduce((sum, count) => sum + (count || 0), 0);
             }
+        }
+        
+        // Only use legacy probes if probesByZone is empty (backward compatibility for old saves)
+        if (totalProbes === 0) {
+            totalProbes += Object.values(gameState.probes || {}).reduce((sum, count) => sum + (count || 0), 0);
         }
         const totalEl = document.getElementById('probe-summary-total');
         if (totalEl) {
@@ -137,17 +141,48 @@ class ProbeSummaryPanel {
         }
         
         // Calculate doubling time
-        // Doubling time = current_probe_count / production_rate_per_second
+        // For exponential growth: if production_rate scales with probe_count,
+        // then doubling_time = ln(2) * current_probes / production_rate
+        // For linear growth (constant production rate): doubling_time = current_probes / production_rate
+        // Since probe production includes replicating probes (which scale with probe count),
+        // we use exponential growth formula
         let doublingTime = Infinity;
         if (totalProbeProductionRate > 0 && totalProbes > 0) {
-            doublingTime = totalProbes / totalProbeProductionRate;
+            // Calculate growth rate: production_rate / current_probes (probes per second per probe)
+            const growthRate = totalProbeProductionRate / totalProbes;
+            
+            // For exponential growth: doubling_time = ln(2) / growth_rate
+            // This is equivalent to: ln(2) * current_probes / production_rate
+            if (growthRate > 0 && isFinite(growthRate)) {
+                doublingTime = Math.log(2) / growthRate;
+            } else {
+                // Fallback to linear growth if growth rate is invalid
+                doublingTime = totalProbes / totalProbeProductionRate;
+            }
         }
         const doublingEl = document.getElementById('probe-summary-doubling');
         if (doublingEl) {
             if (doublingTime === Infinity || doublingTime <= 0 || !isFinite(doublingTime)) {
                 doublingEl.textContent = '—';
             } else {
-                doublingEl.textContent = `${Math.floor(doublingTime).toLocaleString('en-US')}s`;
+                // Format time nicely
+                const seconds = Math.floor(doublingTime);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+                const days = Math.floor(hours / 24);
+                
+                let timeStr = '';
+                if (days > 0) {
+                    timeStr = `${days}d ${hours % 24}h ${minutes % 60}m`;
+                } else if (hours > 0) {
+                    timeStr = `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+                } else if (minutes > 0) {
+                    timeStr = `${minutes}m ${seconds % 60}s`;
+                } else {
+                    timeStr = `${seconds}s`;
+                }
+                
+                doublingEl.textContent = timeStr;
             }
         }
 

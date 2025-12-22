@@ -10,11 +10,22 @@ class CommandPanel {
     
     setSelectedZone(zoneId) {
         this.selectedZone = zoneId;
+        if (zoneId) {
+            this.render();
+            this.setupEventListeners();
+            this.positionAboveSelectedZone();
+        } else {
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+        }
         this.update(this.gameState); // Refresh display with new zone
     }
 
     init() {
         this.render();
+        // Initially hide the panel column
+        const panelColumn = document.getElementById('command-panel-column');
+        if (panelColumn) panelColumn.style.display = 'none';
     }
 
     render() {
@@ -22,16 +33,9 @@ class CommandPanel {
 
         let html = '<div class="command-section-simple">';
         
-        // Zone selection header
+        // No zone header - sliders will be displayed directly on zone tile
         if (!this.selectedZone) {
-            html += '<div style="padding: 10px; text-align: center; color: rgba(255, 255, 255, 0.6);">Select an orbital zone to configure</div>';
-        } else {
-            const zones = window.orbitalZoneSelector?.orbitalZones || [];
-            const zone = zones.find(z => z.id === this.selectedZone);
-            const zoneName = zone ? zone.name.replace(/\s+Orbit\s*$/i, '') : this.selectedZone;
-            html += `<div style="padding: 10px; text-align: center; background: rgba(74, 158, 255, 0.2); border-bottom: 1px solid rgba(74, 158, 255, 0.3); margin-bottom: 10px;">`;
-            html += `<strong>Zone: ${zoneName}</strong>`;
-            html += `</div>`;
+            html += '<div style="display: none;"></div>';
         }
         
         // Create a flex container for sliders
@@ -191,12 +195,31 @@ class CommandPanel {
         const zone = zones.find(z => z.id === this.selectedZone);
         const isDysonZone = zone && zone.is_dyson_zone;
         
+        // Remove old event listeners by cloning and replacing elements
+        const removeOldListeners = (elementId) => {
+            const oldEl = document.getElementById(elementId);
+            if (oldEl) {
+                const newEl = oldEl.cloneNode(true);
+                oldEl.parentNode.replaceChild(newEl, oldEl);
+                return newEl;
+            }
+            return null;
+        };
+        
         if (isDysonZone) {
             // Dyson zone: Replicate vs Construct slider
-            const replicateConstructSlider = document.getElementById('dyson-replicate-construct-slider');
+            const replicateConstructSlider = removeOldListeners('dyson-replicate-construct-slider') || 
+                document.getElementById('dyson-replicate-construct-slider');
             if (replicateConstructSlider) {
-                replicateConstructSlider.addEventListener('mousedown', () => { this.isUserInteracting = true; });
-                replicateConstructSlider.addEventListener('mouseup', () => { this.isUserInteracting = false; });
+                replicateConstructSlider.addEventListener('mousedown', () => { 
+                    this.isUserInteracting = true; 
+                });
+                replicateConstructSlider.addEventListener('mouseup', () => { 
+                    this.isUserInteracting = false; 
+                });
+                replicateConstructSlider.addEventListener('change', (e) => {
+                    this.isUserInteracting = false;
+                });
                 replicateConstructSlider.addEventListener('input', (e) => {
                     const value = parseInt(e.target.value);
                     // Invert: slider value is replicate %, but we store construct %
@@ -210,10 +233,18 @@ class CommandPanel {
             }
             
             // Dyson zone: Compute vs Economy slider
-            const computeEconomySlider = document.getElementById('dyson-compute-economy-slider');
+            const computeEconomySlider = removeOldListeners('dyson-compute-economy-slider') || 
+                document.getElementById('dyson-compute-economy-slider');
             if (computeEconomySlider) {
-                computeEconomySlider.addEventListener('mousedown', () => { this.isUserInteracting = true; });
-                computeEconomySlider.addEventListener('mouseup', () => { this.isUserInteracting = false; });
+                computeEconomySlider.addEventListener('mousedown', () => { 
+                    this.isUserInteracting = true; 
+                });
+                computeEconomySlider.addEventListener('mouseup', () => { 
+                    this.isUserInteracting = false; 
+                });
+                computeEconomySlider.addEventListener('change', (e) => {
+                    this.isUserInteracting = false;
+                });
                 computeEconomySlider.addEventListener('input', (e) => {
                     const value = parseInt(e.target.value);
                     const fillEl = document.getElementById('dyson-compute-economy-bar-fill');
@@ -226,10 +257,18 @@ class CommandPanel {
             }
         } else {
             // Regular zones: Harvest vs Build slider
-            const harvestBuildSlider = document.getElementById('harvest-build-slider');
+            const harvestBuildSlider = removeOldListeners('harvest-build-slider') || 
+                document.getElementById('harvest-build-slider');
             if (harvestBuildSlider) {
-                harvestBuildSlider.addEventListener('mousedown', () => { this.isUserInteracting = true; });
-                harvestBuildSlider.addEventListener('mouseup', () => { this.isUserInteracting = false; });
+                harvestBuildSlider.addEventListener('mousedown', () => { 
+                    this.isUserInteracting = true; 
+                });
+                harvestBuildSlider.addEventListener('mouseup', () => { 
+                    this.isUserInteracting = false; 
+                });
+                harvestBuildSlider.addEventListener('change', (e) => {
+                    this.isUserInteracting = false;
+                });
                 harvestBuildSlider.addEventListener('input', (e) => {
                     const value = parseInt(e.target.value);
                     // mining_slider: 0 = all build, 100 = all mine, so value is harvest %
@@ -242,10 +281,18 @@ class CommandPanel {
             }
             
             // Regular zones: Construct vs Replicate slider
-            const constructReplicateSlider = document.getElementById('construct-replicate-slider');
+            const constructReplicateSlider = removeOldListeners('construct-replicate-slider') || 
+                document.getElementById('construct-replicate-slider');
             if (constructReplicateSlider) {
-                constructReplicateSlider.addEventListener('mousedown', () => { this.isUserInteracting = true; });
-                constructReplicateSlider.addEventListener('mouseup', () => { this.isUserInteracting = false; });
+                constructReplicateSlider.addEventListener('mousedown', () => { 
+                    this.isUserInteracting = true; 
+                });
+                constructReplicateSlider.addEventListener('mouseup', () => { 
+                    this.isUserInteracting = false; 
+                });
+                constructReplicateSlider.addEventListener('change', (e) => {
+                    this.isUserInteracting = false;
+                });
                 constructReplicateSlider.addEventListener('input', (e) => {
                     const value = parseInt(e.target.value);
                     // Invert: slider value is construct %, but we store replication_slider (0 = all construct, 100 = all replicate)
@@ -268,15 +315,21 @@ class CommandPanel {
     async updateZonePolicy(policyKey, value) {
         if (!this.selectedZone) return;
         try {
-            if (typeof gameEngine !== 'undefined' && gameEngine.setZonePolicy) {
-                await gameEngine.setZonePolicy(this.selectedZone, policyKey, value);
-            } else {
-                // Fallback: update directly in game state
-                if (!gameEngine.zonePolicies) gameEngine.zonePolicies = {};
-                if (!gameEngine.zonePolicies[this.selectedZone]) {
-                    gameEngine.zonePolicies[this.selectedZone] = {};
+            if (typeof gameEngine !== 'undefined') {
+                // Try engine.setZonePolicy first (GameEngine instance)
+                if (gameEngine.engine && typeof gameEngine.engine.setZonePolicy === 'function') {
+                    await gameEngine.engine.setZonePolicy(this.selectedZone, policyKey, value);
+                } else if (typeof gameEngine.setZonePolicy === 'function') {
+                    await gameEngine.setZonePolicy(this.selectedZone, policyKey, value);
+                } else {
+                    // Fallback: update directly in game state
+                    if (!gameEngine.engine) gameEngine.engine = {};
+                    if (!gameEngine.engine.zonePolicies) gameEngine.engine.zonePolicies = {};
+                    if (!gameEngine.engine.zonePolicies[this.selectedZone]) {
+                        gameEngine.engine.zonePolicies[this.selectedZone] = {};
+                    }
+                    gameEngine.engine.zonePolicies[this.selectedZone][policyKey] = value;
                 }
-                gameEngine.zonePolicies[this.selectedZone][policyKey] = value;
             }
         } catch (error) {
             console.error('Failed to update zone policy:', error);
@@ -293,10 +346,12 @@ class CommandPanel {
 
     async updateDysonPowerAllocation(value) {
         try {
-            if (typeof gameEngine !== 'undefined' && gameEngine.engine) {
-                gameEngine.engine.dysonPowerAllocation = value;
-            } else if (typeof gameEngine !== 'undefined' && gameEngine.dysonPowerAllocation !== undefined) {
-                gameEngine.dysonPowerAllocation = value;
+            if (typeof gameEngine !== 'undefined') {
+                if (gameEngine.engine) {
+                    gameEngine.engine.dysonPowerAllocation = value;
+                } else if (gameEngine.dysonPowerAllocation !== undefined) {
+                    gameEngine.dysonPowerAllocation = value;
+                }
             }
         } catch (error) {
             console.error('Failed to update Dyson power allocation:', error);
@@ -345,22 +400,32 @@ class CommandPanel {
         // Re-render if zone selection changed or if sliders don't exist
         const zones = window.orbitalZoneSelector?.orbitalZones || [];
         const zone = this.selectedZone ? zones.find(z => z.id === this.selectedZone) : null;
-        const zoneName = zone ? zone.name.replace(/\s+Orbit\s*$/i, '') : null;
-        const currentZoneHeader = this.container.querySelector('.command-section-simple > div:first-child');
-        const needsRerender = !currentZoneHeader || 
-            (this.selectedZone && !currentZoneHeader.textContent.includes(zoneName)) ||
-            (this.selectedZone && !document.getElementById('dyson-replicate-construct-slider') && 
+        const needsRerender = this.selectedZone && 
+            (!document.getElementById('dyson-replicate-construct-slider') && 
              !document.getElementById('harvest-build-slider'));
         
         if (needsRerender) {
             this.render();
             this.setupEventListeners();
         }
+        
+        if (this.selectedZone) {
+            // Use requestAnimationFrame to ensure DOM is ready
+            requestAnimationFrame(() => {
+                this.positionAboveSelectedZone();
+            });
+        } else {
+            // Hide container when no zone selected
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+        }
 
         if (!this.selectedZone) return;
 
         // Don't update slider VALUES if user is actively interacting
-        const wasInteracting = this.isUserInteracting;
+        if (this.isUserInteracting) {
+            return; // Skip updates while user is dragging
+        }
         
         const isDysonZone = zone && zone.is_dyson_zone;
         const zonePolicies = gameState.zone_policies || {};
@@ -371,49 +436,107 @@ class CommandPanel {
             const replicateConstructSlider = document.getElementById('dyson-replicate-construct-slider');
             const constructValue = zonePolicy.construct_slider !== undefined ? zonePolicy.construct_slider : 50;
             const replicateValue = 100 - constructValue; // Display replicate %
-            if (replicateConstructSlider && !wasInteracting && parseInt(replicateConstructSlider.value) != replicateValue) {
-                replicateConstructSlider.value = replicateValue;
-                const fillEl = document.getElementById('dyson-replicate-construct-bar-fill');
-                const lineEl = document.getElementById('dyson-replicate-construct-bar-line');
-                if (fillEl) fillEl.style.height = `${replicateValue}%`;
-                if (lineEl) lineEl.style.bottom = `${replicateValue}%`;
+            if (replicateConstructSlider) {
+                const currentValue = parseInt(replicateConstructSlider.value);
+                if (currentValue != replicateValue) {
+                    replicateConstructSlider.value = replicateValue;
+                    const fillEl = document.getElementById('dyson-replicate-construct-bar-fill');
+                    const lineEl = document.getElementById('dyson-replicate-construct-bar-line');
+                    if (fillEl) fillEl.style.height = `${replicateValue}%`;
+                    if (lineEl) lineEl.style.bottom = `${replicateValue}%`;
+                }
             }
             
             // Dyson zone: Update compute vs economy slider
             const computeEconomySlider = document.getElementById('dyson-compute-economy-slider');
             const computeValue = gameState.dyson_power_allocation !== undefined ? gameState.dyson_power_allocation : 0;
-            if (computeEconomySlider && !wasInteracting && parseInt(computeEconomySlider.value) != computeValue) {
-                computeEconomySlider.value = computeValue;
-                const fillEl = document.getElementById('dyson-compute-economy-bar-fill');
-                const lineEl = document.getElementById('dyson-compute-economy-bar-line');
-                if (fillEl) fillEl.style.height = `${computeValue}%`;
-                if (lineEl) lineEl.style.bottom = `${computeValue}%`;
+            if (computeEconomySlider) {
+                const currentValue = parseInt(computeEconomySlider.value);
+                if (currentValue != computeValue) {
+                    computeEconomySlider.value = computeValue;
+                    const fillEl = document.getElementById('dyson-compute-economy-bar-fill');
+                    const lineEl = document.getElementById('dyson-compute-economy-bar-line');
+                    if (fillEl) fillEl.style.height = `${computeValue}%`;
+                    if (lineEl) lineEl.style.bottom = `${computeValue}%`;
+                }
             }
         } else {
             // Regular zones: Update harvest vs build slider
             const harvestBuildSlider = document.getElementById('harvest-build-slider');
             const miningValue = zonePolicy.mining_slider !== undefined ? zonePolicy.mining_slider : 50;
             // mining_slider: 0 = all build, 100 = all mine, so display as harvest %
-            if (harvestBuildSlider && !wasInteracting && parseInt(harvestBuildSlider.value) != miningValue) {
-                harvestBuildSlider.value = miningValue;
-                const fillEl = document.getElementById('harvest-build-bar-fill');
-                const lineEl = document.getElementById('harvest-build-bar-line');
-                if (fillEl) fillEl.style.height = `${miningValue}%`;
-                if (lineEl) lineEl.style.bottom = `${miningValue}%`;
+            if (harvestBuildSlider) {
+                const currentValue = parseInt(harvestBuildSlider.value);
+                if (currentValue != miningValue) {
+                    harvestBuildSlider.value = miningValue;
+                    const fillEl = document.getElementById('harvest-build-bar-fill');
+                    const lineEl = document.getElementById('harvest-build-bar-line');
+                    if (fillEl) fillEl.style.height = `${miningValue}%`;
+                    if (lineEl) lineEl.style.bottom = `${miningValue}%`;
+                }
             }
             
             // Regular zones: Update construct vs replicate slider (invert: store replication, display construct)
             const constructReplicateSlider = document.getElementById('construct-replicate-slider');
             const replicationValue = zonePolicy.replication_slider !== undefined ? zonePolicy.replication_slider : 50;
             const constructValue = 100 - replicationValue; // Display construct %
-            if (constructReplicateSlider && !wasInteracting && parseInt(constructReplicateSlider.value) != constructValue) {
-                constructReplicateSlider.value = constructValue;
-                const fillEl = document.getElementById('construct-replicate-bar-fill');
-                const lineEl = document.getElementById('construct-replicate-bar-line');
-                if (fillEl) fillEl.style.height = `${constructValue}%`;
-                if (lineEl) lineEl.style.bottom = `${constructValue}%`;
+            if (constructReplicateSlider) {
+                const currentValue = parseInt(constructReplicateSlider.value);
+                if (currentValue != constructValue) {
+                    constructReplicateSlider.value = constructValue;
+                    const fillEl = document.getElementById('construct-replicate-bar-fill');
+                    const lineEl = document.getElementById('construct-replicate-bar-line');
+                    if (fillEl) fillEl.style.height = `${constructValue}%`;
+                    if (lineEl) lineEl.style.bottom = `${constructValue}%`;
+                }
             }
         }
+    }
+
+    positionAboveSelectedZone() {
+        if (!this.selectedZone) {
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+            return;
+        }
+        
+        if (!this.container) {
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+            return;
+        }
+        
+        const zoneSelector = window.orbitalZoneSelector;
+        if (!zoneSelector || !zoneSelector.container) {
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+            return;
+        }
+        
+        // Find the selected zone tile
+        const zoneTile = zoneSelector.container.querySelector(`.orbital-zone-tile[data-zone="${this.selectedZone}"]`);
+        if (!zoneTile) {
+            const panelColumn = document.getElementById('command-panel-column');
+            if (panelColumn) panelColumn.style.display = 'none';
+            return;
+        }
+        
+        // Position command panel above the selected tile
+        const tileRect = zoneTile.getBoundingClientRect();
+        const panelColumn = document.getElementById('command-panel-column');
+        if (!panelColumn) return;
+        
+        // Position relative to viewport, then adjust
+        const leftPos = tileRect.left + (tileRect.width / 2);
+        const topPos = tileRect.top - 150; // Position above tile
+        
+        // Show and position the container
+        panelColumn.style.display = 'block';
+        panelColumn.style.position = 'fixed';
+        panelColumn.style.left = `${leftPos}px`;
+        panelColumn.style.top = `${topPos}px`;
+        panelColumn.style.transform = 'translateX(-50%)';
+        panelColumn.style.zIndex = '1000';
     }
 
     updateTooltips() {

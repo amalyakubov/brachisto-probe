@@ -1,5 +1,6 @@
 """Core game engine for simulation."""
 import math
+import warnings
 from backend.game_data_loader import get_game_data_loader
 from backend.config import Config
 
@@ -47,27 +48,38 @@ class GameEngine:
         
         # Initialize probes by zone and starting buildings
         zones = self.data_loader.load_orbital_mechanics()
-        initial_probes = self.config.get('initial_probes', Config.INITIAL_PROBES)
-        default_zone = 'earth'  # Default starting zone
+        initial_probes = self.config.get('initial_probes', 10)  # Start with 10 probes
+        dyson_zone_id = 'dyson_sphere'
+        mercury_zone_id = 'mercury'
+        asteroid_belt_zone_id = 'asteroid_belt'
         
         for zone in zones:
             zone_id = zone['id']
             self.probes_by_zone[zone_id] = {'probe': 0}
             self.structures_by_zone[zone_id] = {}
             
-            if zone_id == default_zone:
-                # Earth starts with 1 probe
+            if zone_id == dyson_zone_id:
+                # Dyson zone starts with 10 probes and 1 mobile factory
                 self.probes_by_zone[zone_id] = {'probe': initial_probes}
-                # Earth starts with 1 solar array, 1 refinery, 1 mobile factory
                 self.structures_by_zone[zone_id] = {
-                    'solar_array_basic': 1,
-                    'refinery': 1,
                     'mobile_factory': 1
                 }
                 # Also add to legacy global structures for backward compatibility
-                self.structures['solar_array_basic'] = 1
-                self.structures['refinery'] = 1
                 self.structures['mobile_factory'] = 1
+            elif zone_id == mercury_zone_id:
+                # Mercury starts with 1 solar array (orbital array)
+                self.structures_by_zone[zone_id] = {
+                    'solar_array_basic': 1
+                }
+                # Also add to legacy global structures for backward compatibility
+                self.structures['solar_array_basic'] = 1
+            elif zone_id == asteroid_belt_zone_id:
+                # Asteroid belt starts with 1 mining station
+                self.structures_by_zone[zone_id] = {
+                    'basic_mining_station': 1
+                }
+                # Also add to legacy global structures for backward compatibility
+                self.structures['basic_mining_station'] = 1
             
             # Initialize zone allocations
             if zone.get('is_dyson_zone', False):
@@ -418,7 +430,18 @@ class GameEngine:
         return sum(self.zone_metal_remaining.values())
     
     def tick(self, delta_time):
-        """Advance game simulation by one tick."""
+        """Advance game simulation by one tick.
+        
+        DEPRECATED: This method should NOT be called during runtime gameplay.
+        All game ticks now run locally in JavaScript. Python GameEngine is only
+        used for initialization to generate the initial game state.
+        """
+        warnings.warn(
+            "GameEngine.tick() is deprecated. Game ticks now run locally in JavaScript. "
+            "Python GameEngine is only used for initialization.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.tick_count += 1
         self.time += delta_time
         
@@ -2302,7 +2325,18 @@ class GameEngine:
         return None
     
     def perform_action(self, action_type, action_data):
-        """Perform a game action."""
+        """Perform a game action.
+        
+        DEPRECATED: This method should NOT be called during runtime gameplay.
+        All game actions now run locally in JavaScript. Python GameEngine is only
+        used for initialization to generate the initial game state.
+        """
+        warnings.warn(
+            "GameEngine.perform_action() is deprecated. Game actions now run locally in JavaScript. "
+            "Python GameEngine is only used for initialization.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if action_type == 'purchase_structure':
             return self._purchase_structure(action_data)
         elif action_type == 'purchase_probe':
@@ -2659,7 +2693,18 @@ class GameEngine:
         return {'success': True, 'category': category, 'enabled': enabled, 'toggled_count': toggled_count}
     
     def recycle_factory(self, factory_id):
-        """Recycle a factory (no longer zone-specific)."""
+        """Recycle a factory (no longer zone-specific).
+        
+        DEPRECATED: This method should NOT be called during runtime gameplay.
+        Factory recycling now runs locally in JavaScript. Python GameEngine is only
+        used for initialization to generate the initial game state.
+        """
+        warnings.warn(
+            "GameEngine.recycle_factory() is deprecated. Factory recycling now runs locally in JavaScript. "
+            "Python GameEngine is only used for initialization.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if factory_id not in self.structures:
             raise ValueError(f"Factory {factory_id} not found")
         

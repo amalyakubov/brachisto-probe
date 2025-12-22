@@ -104,7 +104,7 @@ body {
 /* Resource Warnings */
 .resource-warnings {
     position: fixed;
-    top: 70px;
+    top: 100px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 999;
@@ -334,7 +334,7 @@ body {
 .probe-summary-panel-container {
     position: absolute;
     left: 10px;
-    top: 300px;
+    top: 160px;
     width: 200px;
     z-index: 100;
     pointer-events: none;
@@ -474,11 +474,9 @@ body {
 
 /* Command Panel Column - Overlay on right side */
 .command-panel-column {
-    position: fixed;
-    top: 50%;
-    right: 400px;
-    transform: translateY(-50%);
+    position: absolute;
     width: auto;
+    display: none; /* Initially hidden, shown when zone is selected */
     height: auto;
     background: transparent;
     display: flex;
@@ -1356,20 +1354,20 @@ body {
 
 .command-bar-label-top,
 .command-bar-label-bottom {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.8);
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.7);
     text-align: center;
     font-weight: normal;
     text-transform: none;
-    min-height: 16px;
+    min-height: 14px;
     display: flex;
     align-items: center;
 }
 
 .command-bar-track {
     position: relative;
-    width: 24px;
-    height: 200px;
+    width: 18px;
+    height: 120px;
     background: rgba(255, 255, 255, 0.1);
     border-radius: 2px;
     overflow: hidden;
@@ -2355,6 +2353,7 @@ button:disabled {
 
 /* Title Bar */
 .game-title {
+    display: none; /* Hide game title */
     position: absolute;
     top: 20px;
     right: 20px;

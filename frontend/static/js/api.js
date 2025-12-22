@@ -114,6 +114,17 @@ class API {
         return data;
     }
 
+    async saveGameState(sessionId, gameState) {
+        // Save game state to backend (for cloud sync)
+        return await this.request('/api/game/save', {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: sessionId,
+                game_state: gameState
+            })
+        });
+    }
+
     async gameAction(sessionId, actionType, actionData) {
         // Don't require auth token for guest mode
         const url = `${this.baseURL}/api/game/action`;

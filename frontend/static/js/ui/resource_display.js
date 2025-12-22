@@ -528,21 +528,34 @@ class ResourceDisplay {
         if (dysonProgressEl) dysonProgressEl.textContent = `${(dysonProgress * 100).toFixed(5)}%`;
         if (dysonMassEl) dysonMassEl.textContent = `${this.formatNumber(dysonMass)} kg`;
         
-        // Calculate probe mass (sum of all probe types * 10 kg per probe)
+        // Calculate probe mass (sum across all zones * 10 kg per probe)
         const PROBE_MASS = 10; // kg per probe (from Config.PROBE_MASS)
-        const probes = gameState.probes || {};
         let totalProbeMass = 0;
+        
+        // Legacy: global probe counts
+        const probes = gameState.probes || {};
         Object.values(probes).forEach(count => {
             totalProbeMass += (count || 0) * PROBE_MASS;
         });
+        
+        // Zone-based probe counts (sum across all zones)
+        const probesByZone = gameState.probes_by_zone || {};
+        for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
+            if (zoneProbes && typeof zoneProbes === 'object') {
+                for (const count of Object.values(zoneProbes)) {
+                    totalProbeMass += (count || 0) * PROBE_MASS;
+                }
+            }
+        }
+        
         const probeMassEl = document.getElementById('resource-probe-mass');
         if (probeMassEl) probeMassEl.textContent = `${this.formatNumber(totalProbeMass)} kg`;
         
-        // Calculate structure mass (sum of structure count * base_cost_metal for each structure)
-        const structures = gameState.structures || {};
+        // Calculate structure mass (sum across all zones * base_cost_metal for each structure)
         let totalStructureMass = 0;
         if (this.buildings) {
-            // Search through all building categories
+            // Legacy: global structures
+            const structures = gameState.structures || {};
             Object.keys(structures).forEach(buildingId => {
                 const count = structures[buildingId] || 0;
                 if (count > 0) {
@@ -559,6 +572,29 @@ class ResourceDisplay {
                     }
                 }
             });
+            
+            // Zone-based structures (sum across all zones)
+            const structuresByZone = gameState.structures_by_zone || {};
+            for (const [zoneId, zoneStructures] of Object.entries(structuresByZone)) {
+                if (zoneStructures && typeof zoneStructures === 'object') {
+                    Object.keys(zoneStructures).forEach(buildingId => {
+                        const count = zoneStructures[buildingId] || 0;
+                        if (count > 0) {
+                            // Find building in buildings data
+                            let building = null;
+                            for (const category in this.buildings) {
+                                if (Array.isArray(this.buildings[category])) {
+                                    building = this.buildings[category].find(b => b.id === buildingId);
+                                    if (building) break;
+                                }
+                            }
+                            if (building && building.base_cost_metal) {
+                                totalStructureMass += count * building.base_cost_metal;
+                            }
+                        }
+                    });
+                }
+            }
         }
         const structureMassEl = document.getElementById('resource-structure-mass');
         if (structureMassEl) structureMassEl.textContent = `${this.formatNumber(totalStructureMass)} kg`;
