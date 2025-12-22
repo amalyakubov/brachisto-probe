@@ -751,8 +751,18 @@ class OrbitalZoneSelector {
         
         if (isDysonZone) {
             // Dyson zone tooltip
+            // Calculate solar flux per m² (inverse square law)
+            // Earth gets ~1361 W/m² at 1 AU
+            const SOLAR_FLUX_EARTH = 1361; // W/m² at 1 AU
+            const radiusAU = zone.radius_au || 0.2; // Dyson sphere is at ~0.2 AU
+            const solarFluxPerM2 = SOLAR_FLUX_EARTH / (radiusAU * radiusAU);
+            
             tooltipContent = `
                 <div class="probe-summary-title">${zone.name}</div>
+                <div class="probe-summary-item">
+                    <div class="probe-summary-label">Solar Flux</div>
+                    <div class="probe-summary-value">${solarFluxPerM2.toFixed(1)} W/m²</div>
+                </div>
                 <div class="probe-summary-item">
                     <div class="probe-summary-label">Probes</div>
                     <div class="probe-summary-value">${this.formatNumber(Math.floor(numProbes))}</div>
@@ -784,8 +794,39 @@ class OrbitalZoneSelector {
             `;
         } else {
             // Regular zone tooltip
+            // Calculate solar flux per m² (inverse square law)
+            // Earth gets ~1361 W/m² at 1 AU
+            const SOLAR_FLUX_EARTH = 1361; // W/m² at 1 AU
+            const radiusAU = zone.radius_au || 1.0;
+            const solarFluxPerM2 = SOLAR_FLUX_EARTH / (radiusAU * radiusAU);
+            
+            // Calculate mining energy cost per kg/day
+            // Base: 453515 / 86400 W per kg/day at Earth baseline
+            // Formula: energy_cost_per_kg_day = base * (1.0 + delta_v_penalty)^2
+            const BASE_MINING_ENERGY_COST = 453515 / 86400; // W per kg/day at Earth baseline
+            const miningEnergyCostPerKgDay = BASE_MINING_ENERGY_COST * Math.pow(1.0 + deltaVPenalty, 2);
+            
+            // Format mining cost
+            const formatMiningCost = (cost) => {
+                if (cost < 1) return cost.toFixed(3) + ' W·d/kg';
+                if (cost < 1000) return cost.toFixed(2) + ' W·d/kg';
+                return (cost / 1000).toFixed(2) + ' kW·d/kg';
+            };
+            
             tooltipContent = `
                 <div class="probe-summary-title">${zone.name}</div>
+                <div class="probe-summary-item">
+                    <div class="probe-summary-label">Solar Flux</div>
+                    <div class="probe-summary-value">${solarFluxPerM2.toFixed(1)} W/m²</div>
+                </div>
+                <div class="probe-summary-item">
+                    <div class="probe-summary-label">Metal Fraction</div>
+                    <div class="probe-summary-value">${(metalPercentage * 100).toFixed(1)}%</div>
+                </div>
+                <div class="probe-summary-item">
+                    <div class="probe-summary-label">Mining Cost</div>
+                    <div class="probe-summary-value">${formatMiningCost(miningEnergyCostPerKgDay)}</div>
+                </div>
                 <div class="probe-summary-item">
                     <div class="probe-summary-label">Probes</div>
                     <div class="probe-summary-value">${this.formatNumber(Math.floor(numProbes))}</div>
