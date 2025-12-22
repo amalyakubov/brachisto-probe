@@ -710,7 +710,7 @@ class GameEngine {
         // Calculate current rates for display
         const energyProductionRate = this._calculateEnergyProduction() + Config.CONSTANT_ENERGY_SUPPLY;
         const energyConsumptionRate = this._calculateEnergyConsumption();
-        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion]
+        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion, zoneStructureEfficiency]
         const intelligenceProductionRate = this._calculateIntelligenceProduction();
         const [probeProductionRates, , factoryMetalCostPerProbe] = this._calculateProbeProduction();
         const probeProductionRate = Object.values(probeProductionRates).reduce((a, b) => a + b, 0);
@@ -865,7 +865,7 @@ class GameEngine {
         // Calculate base production and consumption rates (before energy throttling)
         const zoneCalcStart = profiler ? profiler.startTiming('zone_calculation') : null;
         const energyProduction = this._calculateEnergyProduction();
-        const [baseMetalRate, zoneMetalDepletion, baseSlagRate, zoneSlagDepletion] = this._calculateMetalProduction();
+        const [baseMetalRate, zoneMetalDepletion, baseSlagRate, zoneSlagDepletion, zoneStructureEfficiency] = this._calculateMetalProduction();
         if (profiler && zoneCalcStart !== null) {
             profiler.endTiming('zone_calculation', zoneCalcStart);
         }
@@ -1118,15 +1118,33 @@ class GameEngine {
                 this.zoneMetalRemaining[zoneId] -= actualDepletion;
                 this.zoneMetalRemaining[zoneId] = Math.max(0, this.zoneMetalRemaining[zoneId]);
                 
-                // Reduce total mass remaining (metal + non-metal)
-                this.zoneMassRemaining[zoneId] -= actualDepletion;
-                this.zoneMassRemaining[zoneId] = Math.max(0, this.zoneMassRemaining[zoneId]);
-                
-                // Produce slag proportional to mass mined (non-metal portion)
+                // Calculate total mass mined using appropriate efficiency
+                // For probe mining: use base metalPercentage
+                // For structure mining: use improved metalPercentage (base + efficiency bonus)
                 const zone = zoneCache[zoneId];
                 if (zone) {
-                    const metalPercentage = zone.metal_percentage || 0.32;
-                    const slagProduced = actualDepletion * (1.0 - metalPercentage) / metalPercentage;
+                    const baseMetalPercentage = zone.metal_percentage || 0.32;
+                    const structureEfficiencyBonus = zoneStructureEfficiency[zoneId] || 0.0;
+                    
+                    // If there's structure mining, use weighted average efficiency
+                    // Approximate: assume structure mining proportion based on efficiency bonus presence
+                    // This is an approximation - ideally we'd track probe vs structure depletion separately
+                    let effectiveMetalPercentage = baseMetalPercentage;
+                    if (structureEfficiencyBonus > 0) {
+                        // If structures are mining, use improved efficiency for mass calculation
+                        // Since we don't know the exact ratio, use improved efficiency as a conservative estimate
+                        effectiveMetalPercentage = Math.min(1.0, baseMetalPercentage + structureEfficiencyBonus);
+                    }
+                    
+                    // Calculate total mass mined from metal depletion
+                    const totalMassMined = actualDepletion / effectiveMetalPercentage;
+                    
+                    // Reduce total mass remaining (metal + non-metal)
+                    this.zoneMassRemaining[zoneId] -= totalMassMined;
+                    this.zoneMassRemaining[zoneId] = Math.max(0, this.zoneMassRemaining[zoneId]);
+                    
+                    // Produce slag proportional to mass mined (non-metal portion)
+                    const slagProduced = totalMassMined * (1.0 - effectiveMetalPercentage);
                     if (!(zoneId in this.zoneSlagProduced)) {
                         this.zoneSlagProduced[zoneId] = 0;
                     }
@@ -2098,12 +2116,14 @@ class GameEngine {
         let totalSlagRate = 0.0;
         const zoneMetalDepletion = {};
         const zoneSlagDepletion = {};
+        const zoneStructureEfficiency = {}; // Track structure efficiency bonus per zone for mass calculation
         const zones = this.dataLoader.orbitalZones || [];
         
         // Initialize zone depletion
         for (const zoneId of Object.keys(this.zoneMetalRemaining)) {
             zoneMetalDepletion[zoneId] = 0.0;
             zoneSlagDepletion[zoneId] = 0.0;
+            zoneStructureEfficiency[zoneId] = 0.0; // Default: no efficiency bonus
         }
         
         // Research bonuses (apply to all zones)
@@ -2175,20 +2195,30 @@ class GameEngine {
                     const category = this._getBuildingCategory(buildingId);
                     if (category === 'mining') {
                         const effects = building.effects || {};
-                        // New system: mining produces metal per day, convert to per second
+                        // Mining structures produce metal per day (kg metal/day per structure)
                         const metalPerDay = effects.metal_production_per_day || 0;
-                        const metalPerSecond = metalPerDay; // At 1x speed, 1 day = 1 second
-                        
-                        // Apply zone mining rate multiplier
-                        const zoneMetalOutput = metalPerSecond * miningRateMultiplier;
+                        const efficiencyBonus = effects.metal_efficiency_bonus || 0.0; // Additional % metal extraction
                         
                         // Limit by zone metal remaining
                         const zoneMetal = this.zoneMetalRemaining[zoneId] || 0;
                         if (zoneMetal > 0) {
-                            const structureRate = zoneMetalOutput * count;
+                            const structureRate = metalPerDay * count; // Total metal output (kg/day)
                             const zoneContribution = Math.min(structureRate, zoneMetal);
-                            zoneMetalDepletion[zoneId] = (zoneMetalDepletion[zoneId] || 0) + zoneContribution;
+                            const previousDepletion = zoneMetalDepletion[zoneId] || 0;
+                            zoneMetalDepletion[zoneId] = previousDepletion + zoneContribution;
                             totalMetalRate += zoneContribution;
+                            
+                            // Track structure efficiency bonus for this zone (weighted average if multiple structures)
+                            // This will be used later to calculate mass reduction correctly
+                            const totalStructureMetal = zoneMetalDepletion[zoneId];
+                            if (totalStructureMetal > 0) {
+                                // Weighted average efficiency bonus
+                                const currentEfficiency = zoneStructureEfficiency[zoneId] || 0.0;
+                                zoneStructureEfficiency[zoneId] = 
+                                    (previousDepletion * currentEfficiency + zoneContribution * efficiencyBonus) / totalStructureMetal;
+                            } else {
+                                zoneStructureEfficiency[zoneId] = efficiencyBonus;
+                            }
                         }
                     }
                 }
@@ -2203,7 +2233,8 @@ class GameEngine {
         }
         
         // Return empty zoneSlagDepletion (slag is produced, not depleted)
-        return [totalMetalRate, zoneMetalDepletion, totalSlagRate, {}];
+        // Also return zoneStructureEfficiency for mass calculation
+        return [totalMetalRate, zoneMetalDepletion, totalSlagRate, {}, zoneStructureEfficiency];
     }
     _calculateProbeProduction() {
         const rates = {'probe': 0.0}; // Single probe type only
@@ -2333,7 +2364,7 @@ class GameEngine {
         const manualBuildRateProbesS = baseManualBuildRateKgS / factoryMetalCostPerProbe; // probes/s (theoretical)
         
         // Calculate metal production rate for limiting
-        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion]
+        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion, zoneStructureEfficiency]
         
         // Total metal needed for probe production
         const totalProbeMetalNeeded = totalFactoryMetalCost + (manualBuildRateProbesS * factoryMetalCostPerProbe);
@@ -3798,7 +3829,7 @@ class GameEngine {
         const idleProbes = {'dyson': 0.0, 'probes': 0.0, 'structures': 0.0};
         
         // Calculate metal production rate
-        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion]
+        const [metalProductionRate] = this._calculateMetalProduction(); // Returns [metalRate, zoneMetalDepletion, slagRate, zoneSlagDepletion, zoneStructureEfficiency]
         
         // Check if we have stored metal
         const hasStoredMetal = this.metal > 0;

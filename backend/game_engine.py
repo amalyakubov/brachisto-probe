@@ -1736,21 +1736,23 @@ class GameEngine:
                     category = self._get_building_category(building_id)
                     if category == 'mining':
                         effects = building.get('effects', {})
-                        metal_output = effects.get('metal_production_per_day', 0)
+                        metal_output = effects.get('metal_production_per_day', 0)  # kg metal/day per structure
+                        efficiency_bonus = effects.get('metal_efficiency_bonus', 0.0)  # Additional % metal extraction
                         
                         # Limit by zone metal remaining
                         zone_metal = self.zone_metal_remaining.get(self.harvest_zone, 0)
                         if zone_metal > 0:
-                            structure_rate = metal_output * count
+                            structure_rate = metal_output * count  # Total metal output (kg/day)
                             zone_contribution = min(structure_rate, zone_metal)
                             zone_depletion[self.harvest_zone] += zone_contribution
                             rate += zone_contribution
                             
                             # Mining structures also reduce zone mass (mass conservation)
-                            # Calculate total mass mined from metal contribution
-                            metal_percentage = harvest_zone_data.get('metal_percentage', 0.32)
-                            if metal_percentage > 0:
-                                total_mass_mined = zone_contribution / metal_percentage
+                            # Calculate total mass mined from metal contribution using improved efficiency
+                            base_metal_percentage = harvest_zone_data.get('metal_percentage', 0.32)
+                            improved_metal_percentage = min(1.0, base_metal_percentage + efficiency_bonus)
+                            if improved_metal_percentage > 0:
+                                total_mass_mined = zone_contribution / improved_metal_percentage
                                 if self.harvest_zone in self.zone_mass_remaining:
                                     self.zone_mass_remaining[self.harvest_zone] -= total_mass_mined
                                     self.zone_mass_remaining[self.harvest_zone] = max(0, self.zone_mass_remaining[self.harvest_zone])

@@ -106,9 +106,9 @@
     ],
     "mining": [
       {
-        "id": "basic_mining_station",
-        "name": "Basic Mining Station",
-        "description": "Simple automated mining facility. 10,000 kg/day output.",
+        "id": "mobile_refinery",
+        "name": "Mobile Refinery",
+        "description": "Portable mining and refining facility. Mines 11,000 kg metal/day with 2% improved efficiency.",
         "base_cost_metal": 10000,
         "allowed_orbital_zones": ["mercury", "venus", "earth", "mars", "asteroid_belt"],
         "orbital_efficiency": {
@@ -119,7 +119,8 @@
           "asteroid_belt": 1.0
         },
         "effects": {
-          "metal_production_per_day": 10000,
+          "metal_production_per_day": 11000,
+          "metal_efficiency_bonus": 0.02,
           "energy_consumption_per_second": 100000
         },
         "prerequisites": [],
@@ -128,7 +129,7 @@
       {
         "id": "industrial_mining_complex",
         "name": "Industrial Mining Complex",
-        "description": "Large-scale mining operation. 1,000,000 kg/day output.",
+        "description": "Large-scale mining operation. Mines 1,402,500 kg metal/day with 4% improved efficiency.",
         "base_cost_metal": 1000000,
         "allowed_orbital_zones": ["mercury", "venus", "earth", "mars", "asteroid_belt"],
         "orbital_efficiency": {
@@ -139,8 +140,9 @@
           "asteroid_belt": 1.3
         },
         "effects": {
-          "metal_production_per_day": 1000000,
-          "energy_consumption_per_second": 7000000
+          "metal_production_per_day": 1402500,
+          "metal_efficiency_bonus": 0.04,
+          "energy_consumption_per_second": 10196175
         },
         "prerequisites": [],
         "tier": 2
@@ -148,7 +150,7 @@
       {
         "id": "planetary_excavator",
         "name": "Planetary Excavator",
-        "description": "Massive planetary mining facility. 100,000,000 kg/day output.",
+        "description": "Massive planetary mining facility. Mines 178,200,000 kg metal/day with 6% improved efficiency.",
         "base_cost_metal": 100000000,
         "allowed_orbital_zones": ["mercury", "venus", "earth", "mars"],
         "orbital_efficiency": {
@@ -158,8 +160,9 @@
           "mars": 1.0
         },
         "effects": {
-          "metal_production_per_day": 100000000,
-          "energy_consumption_per_second": 490000000
+          "metal_production_per_day": 178200000,
+          "metal_efficiency_bonus": 0.06,
+          "energy_consumption_per_second": 1037124000
         },
         "prerequisites": [],
         "tier": 3
@@ -167,15 +170,16 @@
       {
         "id": "asteroid_processor",
         "name": "Asteroid Processor",
-        "description": "Asteroid belt processing facility. 10,000,000,000 kg/day output.",
+        "description": "Asteroid belt processing facility. Mines 22,572,000,000 kg metal/day with 8% improved efficiency.",
         "base_cost_metal": 10000000000,
         "allowed_orbital_zones": ["asteroid_belt"],
         "orbital_efficiency": {
           "asteroid_belt": 1.8
         },
         "effects": {
-          "metal_production_per_day": 10000000000,
-          "energy_consumption_per_second": 34300000000
+          "metal_production_per_day": 22572000000,
+          "metal_efficiency_bonus": 0.08,
+          "energy_consumption_per_second": 104959800000
         },
         "prerequisites": [],
         "tier": 4
@@ -183,7 +187,7 @@
       {
         "id": "molecular_dissembler",
         "name": "Molecular Dissembler",
-        "description": "Ultimate mining facility using nanobots. 1,000,000,000,000 kg/day output.",
+        "description": "Ultimate mining facility using nanobots. Mines 2,851,200,000,000 kg metal/day with 10% improved efficiency.",
         "base_cost_metal": 1000000000000,
         "allowed_orbital_zones": ["mercury", "venus", "earth", "mars", "asteroid_belt"],
         "orbital_efficiency": {
@@ -194,8 +198,9 @@
           "asteroid_belt": 2.0
         },
         "effects": {
-          "metal_production_per_day": 1000000000000,
-          "energy_consumption_per_second": 2401000000000
+          "metal_production_per_day": 2851200000000,
+          "metal_efficiency_bonus": 0.10,
+          "energy_consumption_per_second": 10606464000000
         },
         "prerequisites": [],
         "tier": 5
