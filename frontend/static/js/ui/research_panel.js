@@ -11,26 +11,10 @@ class ResearchPanel {
 
     async loadResearch() {
         try {
-            // Load additional research trees
-            const additionalResponse = await fetch('/game_data/additional_research_trees.json');
-            const additionalData = await additionalResponse.json();
-            const additionalTrees = additionalData.additional_research_trees || {};
-            
-            // Try to load main research trees (may not exist)
-            let mainTrees = {};
-            try {
-                const mainResponse = await fetch('/game_data/research_trees.json');
-                const mainData = await mainResponse.json();
-                mainTrees = mainData.research_trees || {};
-            } catch (e) {
-                // File doesn't exist, that's okay
-            }
-            
-            // Merge trees
-            this.researchData = {
-                ...mainTrees,
-                ...additionalTrees
-            };
+            // Load consolidated research trees (all trees are now in one file)
+            const response = await fetch('/game_data/research_trees.json');
+            const data = await response.json();
+            this.researchData = data.research_trees || {};
             
             this.render();
         } catch (error) {

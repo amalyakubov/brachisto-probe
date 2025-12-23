@@ -223,6 +223,31 @@ class ResourceDisplay {
         if (resource === 'dexterity' && !this.gameState) return;
         if (resource !== 'dexterity' && !breakdown) return;
 
+        // Change detection: Cache tooltip content to avoid unnecessary regeneration
+        const tooltipData = resource === 'dexterity' ? {
+            resource: resource,
+            gameState: {
+                metal: this.gameState.metal,
+                metal_production_rate: this.gameState.metal_production_rate,
+                dyson_construction_rate: this.gameState.dyson_construction_rate,
+                probe_production_rate: this.gameState.probe_production_rate,
+                probe_allocations: this.gameState.probe_allocations,
+                build_allocation: this.gameState.build_allocation,
+                resource_breakdowns: this.gameState.resource_breakdowns
+            }
+        } : {
+            resource: resource,
+            breakdown: breakdown
+        };
+        
+        const tooltipHash = JSON.stringify(tooltipData);
+        const cacheKey = `tooltip_${resource}_cache`;
+        
+        if (tooltipHash === this[cacheKey] && this[cacheKey] !== null) {
+            return; // No changes, skip tooltip update
+        }
+        this[cacheKey] = tooltipHash;
+
         let html = '<div class="tooltip-content">';
         
         if (resource === 'dexterity') {
@@ -553,6 +578,34 @@ class ResourceDisplay {
     update(gameState) {
         if (!gameState) return;
         
+        // Change detection: Only update if relevant data has changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        let hash = 0;
+        hash = ((hash << 5) - hash) + (gameState.energy || 0);
+        hash = ((hash << 5) - hash) + (gameState.intelligence || 0);
+        hash = ((hash << 5) - hash) + (gameState.dexterity || 0);
+        hash = ((hash << 5) - hash) + (gameState.dyson_sphere_progress || 0);
+        hash = ((hash << 5) - hash) + (gameState.energy_production_rate || 0);
+        hash = ((hash << 5) - hash) + (gameState.energy_consumption_rate || 0);
+        
+        // Hash probe counts efficiently - single probe type only
+        const probesByZone = gameState.probes_by_zone || {};
+        for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
+            if (zoneProbes && typeof zoneProbes === 'object') {
+                // Single probe type: directly access 'probe' key
+                const zoneCount = zoneProbes['probe'] || 0;
+                hash = ((hash << 5) - hash) + zoneId.charCodeAt(0);
+                hash = ((hash << 5) - hash) + zoneCount;
+            }
+        }
+        
+        const currentHash = hash.toString();
+        
+        if (currentHash === this.lastUpdateHash && this.lastUpdateHash !== null) {
+            return; // No changes, skip update
+        }
+        this.lastUpdateHash = currentHash;
+        
         // Store game state for tooltip calculations
         this.gameState = gameState;
 
@@ -628,18 +681,23 @@ class ResourceDisplay {
         const PROBE_MASS = Config.PROBE_MASS; // kg per probe (from Config.PROBE_MASS = 100 kg)
         let totalProbeMass = 0;
         
-        // Legacy: global probe counts
-        const probes = gameState.probes || {};
-        Object.values(probes).forEach(count => {
-            totalProbeMass += (count || 0) * PROBE_MASS;
-        });
-        
-        // Zone-based probe counts (sum across all zones)
-        const probesByZone = gameState.probes_by_zone || {};
-        for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
-            if (zoneProbes && typeof zoneProbes === 'object') {
-                for (const count of Object.values(zoneProbes)) {
-                    totalProbeMass += (count || 0) * PROBE_MASS;
+        // Use shared probe count cache to avoid redundant calculations
+        const probeCache = window.probeCountCache;
+        if (probeCache) {
+            probeCache.update(gameState);
+            totalProbeMass = probeCache.getTotalProbeMass();
+        } else {
+            // Fallback: calculate manually if cache not available - single probe type only
+            // Legacy: global probe counts
+            const probes = gameState.probes || {};
+            totalProbeMass += (probes['probe'] || 0) * PROBE_MASS;
+            
+            // Zone-based probe counts (sum across all zones) - single probe type only
+            const probesByZone = gameState.probes_by_zone || {};
+            for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
+                if (zoneProbes && typeof zoneProbes === 'object') {
+                    // Single probe type: directly access 'probe' key
+                    totalProbeMass += (zoneProbes['probe'] || 0) * PROBE_MASS;
                 }
             }
         }

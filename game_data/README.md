@@ -24,11 +24,13 @@ This directory contains all game configuration data for the Brachisto-Probe incr
    - Orbital efficiency multipliers per zone
    - Prerequisites and costs
 
-3. **`additional_research_trees.json`**
-   - New research trees for:
-     - Dyson Swarm Construction (9 tiers)
-     - Production Efficiency (10 tiers)
-     - Energy Collection Efficiency (10 tiers)
+3. **`research_trees.json`**
+   - Consolidated research trees (all 20 trees in one file):
+     - 19 regular research trees (10 tiers each)
+     - 1 computer_systems tree with 4 subcategories (10 tiers each)
+     - Total: 230 tiers across all trees
+     - All costs use intelligence-only (`tranche_cost_intelligence`)
+     - Exponential cost scaling: 10,000× per tier
 
 ### Note on Research Trees
 
@@ -108,7 +110,7 @@ with open('game_data/orbital_mechanics.json') as f:
 with open('game_data/buildings.json') as f:
     buildings = json.load(f)
 
-with open('game_data/additional_research_trees.json') as f:
+with open('game_data/research_trees.json') as f:
     additional_research = json.load(f)
 ```
 

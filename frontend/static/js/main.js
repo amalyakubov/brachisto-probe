@@ -91,11 +91,69 @@ class App {
             try {
                 const buildTab = sidebar ? sidebar.getTabContainer('build') : document.getElementById('tab-build');
                 if (buildTab) {
-                    // Create a wrapper div for purchase panel content
-                    buildTab.innerHTML = '<div id="purchase-panel-content"></div>';
+                    // Check if structure already exists (from HTML), otherwise create it
+                    let contentWrapper = document.getElementById('build-tab-content-wrapper');
+                    let purchasePanelContent = document.getElementById('purchase-panel-content');
+                    let toggleBtn = document.getElementById('build-tab-toggle');
+                    
+                    if (!contentWrapper) {
+                        // Create wrapper structure if it doesn't exist
+                        buildTab.innerHTML = `
+                            <div id="build-tab-content-wrapper" class="build-tab-content-wrapper">
+                                <div id="purchase-panel-content"></div>
+                            </div>
+                            <button id="build-tab-toggle" class="build-tab-toggle" title="Show/Hide Build Panel">
+                                <span id="build-tab-toggle-icon">◀</span>
+                            </button>
+                        `;
+                        purchasePanelContent = document.getElementById('purchase-panel-content');
+                        toggleBtn = document.getElementById('build-tab-toggle');
+                    }
+                    
                     this.purchasePanel = new PurchasePanel('purchase-panel-content');
                     // Expose globally for onclick handlers
                     window.purchasePanel = this.purchasePanel;
+                    
+                    // Set up toggle button
+                    if (toggleBtn) {
+                        toggleBtn.addEventListener('click', () => {
+                            const wrapper = document.getElementById('build-tab-content-wrapper');
+                            const icon = document.getElementById('build-tab-toggle-icon');
+                            const buildTab = document.getElementById('tab-build');
+                            if (wrapper && buildTab) {
+                                const isCollapsed = buildTab.classList.contains('collapsed');
+                                if (isCollapsed) {
+                                    // Expand
+                                    buildTab.classList.remove('collapsed');
+                                    wrapper.classList.remove('collapsed');
+                                    if (icon) icon.textContent = '◀';
+                                    toggleBtn.title = 'Hide Build Panel';
+                                } else {
+                                    // Collapse
+                                    buildTab.classList.add('collapsed');
+                                    wrapper.classList.add('collapsed');
+                                    if (icon) icon.textContent = '▶';
+                                    toggleBtn.title = 'Show Build Panel';
+                                }
+                                // Save state
+                                localStorage.setItem('buildTabCollapsed', !isCollapsed);
+                            }
+                        });
+                        
+                        // Load saved state
+                        const savedState = localStorage.getItem('buildTabCollapsed');
+                        if (savedState === 'true') {
+                            const wrapper = document.getElementById('build-tab-content-wrapper');
+                            const icon = document.getElementById('build-tab-toggle-icon');
+                            const buildTab = document.getElementById('tab-build');
+                            if (wrapper && buildTab) {
+                                buildTab.classList.add('collapsed');
+                                wrapper.classList.add('collapsed');
+                                if (icon) icon.textContent = '▶';
+                                toggleBtn.title = 'Show Build Panel';
+                            }
+                        }
+                    }
                 }
             } catch (e) {
                 console.error('Failed to initialize PurchasePanel:', e);
@@ -217,6 +275,16 @@ class App {
 
             // Set up event listeners
             this.setupEventListeners();
+            
+            // Set up main menu button
+            const mainMenuBtn = document.getElementById('main-menu-btn');
+            if (mainMenuBtn) {
+                mainMenuBtn.addEventListener('click', () => {
+                    if (confirm('Return to main menu? Your current game will be saved automatically.')) {
+                        this.returnToMenu();
+                    }
+                });
+            }
 
             // Check authentication (skip for now)
             await this.checkAuth();
@@ -287,14 +355,184 @@ class App {
     }
 
     async checkAuth() {
-        // Skip authentication for now - start game directly
+        // Skip authentication for now - show game menu
         this.isAuthenticated = true;
         this.hideAuthModal();
         
-        // Small delay to ensure UI is ready
+        // Small delay to ensure UI is ready, then show game menu
         setTimeout(() => {
-            this.startNewGame();
+            this.showGameMenu();
         }, 100);
+    }
+    
+    async showGameMenu() {
+        const menuModal = document.getElementById('game-menu-modal');
+        const savedGamesList = document.getElementById('saved-games-list');
+        const loadingScreen = document.getElementById('loading-screen');
+        
+        // Hide loading screen when showing menu
+        if (loadingScreen) {
+            loadingScreen.style.display = 'none';
+        }
+        
+        if (!menuModal) {
+            // If menu doesn't exist, just start new game
+            await this.startNewGame();
+            return;
+        }
+        
+        // Show menu
+        menuModal.style.display = 'flex';
+        
+        // Load saved games
+        try {
+            if (typeof gameStorage !== 'undefined') {
+                await gameStorage.init();
+                const savedGames = await gameStorage.listSavedGames();
+                
+                if (savedGames.length === 0) {
+                    savedGamesList.innerHTML = '<p style="text-align: center; color: #888; padding: 20px;">No saved games found</p>';
+                } else {
+                    savedGamesList.innerHTML = '';
+                    savedGames.forEach(game => {
+                        const gameItem = document.createElement('div');
+                        gameItem.className = 'saved-game-item';
+                        gameItem.style.cssText = 'padding: 15px; margin-bottom: 10px; background: rgba(74, 158, 255, 0.1); border: 1px solid rgba(74, 158, 255, 0.3); border-radius: 5px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;';
+                        
+                        const gameInfo = document.createElement('div');
+                        const date = new Date(game.timestamp);
+                        const timeStr = this.formatTime(game.time || 0);
+                        gameInfo.innerHTML = `
+                            <div style="font-weight: bold; color: #4a9eff; margin-bottom: 5px;">Game ${game.sessionId}</div>
+                            <div style="font-size: 12px; color: #888;">Time: ${timeStr} | Saved: ${date.toLocaleString()}</div>
+                        `;
+                        
+                        const loadBtn = document.createElement('button');
+                        loadBtn.textContent = 'Load';
+                        loadBtn.style.cssText = 'padding: 8px 16px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer;';
+                        loadBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            this.loadGame(game.sessionId);
+                        };
+                        
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.textContent = 'Delete';
+                        deleteBtn.style.cssText = 'padding: 8px 16px; background: #ff4444; color: white; border: none; border-radius: 3px; cursor: pointer; margin-left: 10px;';
+                        deleteBtn.onclick = async (e) => {
+                            e.stopPropagation();
+                            if (confirm('Are you sure you want to delete this saved game?')) {
+                                try {
+                                    await gameStorage.deleteGameState(game.sessionId);
+                                    this.showGameMenu(); // Refresh the list
+                                } catch (error) {
+                                    alert('Failed to delete game: ' + error.message);
+                                }
+                            }
+                        };
+                        
+                        gameItem.appendChild(gameInfo);
+                        const buttonContainer = document.createElement('div');
+                        buttonContainer.appendChild(loadBtn);
+                        buttonContainer.appendChild(deleteBtn);
+                        gameItem.appendChild(buttonContainer);
+                        
+                        // Also allow clicking the item to load
+                        gameItem.onclick = () => this.loadGame(game.sessionId);
+                        
+                        savedGamesList.appendChild(gameItem);
+                    });
+                }
+            } else {
+                savedGamesList.innerHTML = '<p style="text-align: center; color: #888; padding: 20px;">Game storage not available</p>';
+            }
+        } catch (error) {
+            console.error('Failed to load saved games:', error);
+            savedGamesList.innerHTML = '<p style="text-align: center; color: #ff4444; padding: 20px;">Failed to load saved games</p>';
+        }
+        
+        // Set up new game button
+        const newGameBtn = document.getElementById('new-game-btn');
+        if (newGameBtn) {
+            // Remove any existing handlers and add new one
+            newGameBtn.onclick = null;
+            newGameBtn.addEventListener('click', () => {
+                this.startNewGame();
+            });
+        }
+    }
+    
+    hideGameMenu() {
+        const menuModal = document.getElementById('game-menu-modal');
+        if (menuModal) {
+            menuModal.style.display = 'none';
+        }
+    }
+    
+    async loadGame(sessionId) {
+        const loadingScreen = document.getElementById('loading-screen');
+        
+        try {
+            console.log('Loading game:', sessionId);
+            
+            // Show loading screen
+            if (loadingScreen) {
+                loadingScreen.style.display = 'flex';
+                const loadingText = loadingScreen.querySelector('p');
+                if (loadingText) loadingText.textContent = 'Loading game...';
+            }
+            
+            this.hideGameMenu();
+            
+            // Wait for gameEngine to be available
+            let attempts = 0;
+            while ((typeof window.gameEngine === 'undefined') && attempts < 50) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                attempts++;
+            }
+            
+            if (typeof window.gameEngine === 'undefined') {
+                throw new Error('Game engine not loaded - ensure engine.js is loaded before main.js');
+            }
+            
+            // Load game state from storage
+            let gameState = null;
+            if (typeof gameStorage !== 'undefined') {
+                await gameStorage.init();
+                gameState = await gameStorage.loadGameState(sessionId);
+            }
+            
+            if (!gameState) {
+                throw new Error('Saved game not found');
+            }
+            
+            // Load game from state
+            await window.gameEngine.loadFromState(sessionId, {}, gameState);
+            
+            // Hide loading screen
+            if (loadingScreen) {
+                loadingScreen.style.display = 'none';
+            }
+            
+            // Display game state
+            const initialState = window.gameEngine.getGameState();
+            if (initialState) {
+                this.onGameStateUpdate(initialState);
+            }
+        } catch (error) {
+            console.error('Failed to load game:', error);
+            console.error('Error details:', error.stack);
+            
+            if (loadingScreen) {
+                loadingScreen.innerHTML = `
+                    <div style="text-align: center; color: #ff4444; padding: 20px;">
+                        <h1 style="color: #ff4444;">Error Loading Game</h1>
+                        <p style="margin: 10px 0;">${error.message}</p>
+                        <p style="margin: 10px 0; font-size: 12px; color: #888;">Check browser console (F12) for details</p>
+                        <button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer;">Return to Menu</button>
+                    </div>
+                `;
+            }
+        }
     }
 
     showAuthModal() {
@@ -346,8 +584,18 @@ class App {
         try {
             console.log('Starting new game...');
             
-            // Update loading message
+            // Stop any existing game engine first
+            if (window.gameEngine && window.gameEngine.isRunning) {
+                console.log('Stopping existing game engine...');
+                window.gameEngine.stop();
+                // Wait a moment for cleanup
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            // Hide game menu and show loading screen
+            this.hideGameMenu();
             if (loadingScreen) {
+                loadingScreen.style.display = 'flex';
                 const loadingText = loadingScreen.querySelector('p');
                 if (loadingText) loadingText.textContent = 'Initializing game engine...';
             }
@@ -363,8 +611,12 @@ class App {
                 throw new Error('Game engine not loaded - ensure engine.js is loaded before main.js');
             }
             
+            // Generate a unique session ID for this new game
+            // This ensures we don't load old saved state
+            const newSessionId = 'new_game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            
             // Optionally create backend session for saving/leaderboards (non-blocking)
-            let sessionId = null;
+            let sessionId = newSessionId;
             try {
                 const response = await api.startGame({});
                 if (response && response.session_id) {
@@ -373,11 +625,17 @@ class App {
                 }
             } catch (apiError) {
                 console.warn('Failed to create backend session (game will run locally):', apiError);
-                // Continue without backend session - game runs entirely locally
+                // Use the generated local session ID
+                sessionId = newSessionId;
             }
             
-            // Start local game engine
-            await window.gameEngine.start(sessionId || 'local', {});
+            // Start local game engine with unique session ID and fresh config
+            // Pass empty config to ensure we get default initial state
+            await window.gameEngine.start(sessionId, {
+                initial_probes: 1,
+                initial_metal: 1000,
+                initial_energy: 0
+            });
             
             // Update loading message
             if (loadingScreen) {
@@ -417,6 +675,11 @@ class App {
         const profiler = window.performanceProfiler;
         const uiUpdateStart = profiler ? profiler.startTiming('ui_update') : null;
         
+        // Record memory usage
+        if (profiler) {
+            profiler.recordMemoryUsage(gameState);
+        }
+        
         // Throttle UI updates - only update every N frames to reduce CPU usage
         // Update critical displays every frame, but throttle expensive panels
         if (!this.uiUpdateFrameCount) {
@@ -427,8 +690,8 @@ class App {
         // Critical updates every frame (resource display, time controls)
         const criticalUpdate = true;
         
-        // Throttled updates every 5 frames (~12 updates/sec instead of 60)
-        const throttledUpdate = (this.uiUpdateFrameCount % 5 === 0);
+        // Throttled updates every 6 frames (~10 updates/sec instead of 60)
+        const throttledUpdate = (this.uiUpdateFrameCount % 6 === 0);
         
         // Update all UI components
         // Critical updates (every frame)
@@ -441,6 +704,7 @@ class App {
         
         // Throttled updates (every 5 frames = ~12 updates/sec)
         if (throttledUpdate) {
+            const probeUIStart = profiler ? performance.now() : null;
             if (this.purchasePanel) {
                 this.purchasePanel.update(gameState);
             }
@@ -492,6 +756,12 @@ class App {
             if (this.orbitalZoneSelector) {
                 this.orbitalZoneSelector.update(gameState);
             }
+            
+            // Record probe UI update time
+            if (profiler && probeUIStart !== null) {
+                const probeUITime = performance.now() - probeUIStart;
+                profiler.recordUIProbeUpdateTime(probeUITime);
+            }
         }
         
         // Energy display removed
@@ -516,7 +786,10 @@ class App {
         const metal = gameState.zone_metal_remaining ? 
             Object.values(gameState.zone_metal_remaining).reduce((a, b) => a + b, 0) : 0;
 
-        alert(`Game Complete!\nTime: ${this.formatTime(time)}\nMetal Remaining: ${this.formatNumber(metal)} kg`);
+        const message = `Game Complete!\nTime: ${this.formatTime(time)}\nMetal Remaining: ${this.formatNumber(metal)} kg\n\nReturn to main menu?`;
+        if (confirm(message)) {
+            this.returnToMenu();
+        }
 
         // Complete game session
         try {
@@ -531,6 +804,22 @@ class App {
         } catch (error) {
             console.error('Failed to complete game:', error);
         }
+    }
+    
+    returnToMenu() {
+        // Stop the current game
+        if (window.gameEngine) {
+            window.gameEngine.stop();
+        }
+        
+        // Hide game UI
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen) {
+            loadingScreen.style.display = 'none';
+        }
+        
+        // Show menu
+        this.showGameMenu();
     }
 
     formatNumber(value) {

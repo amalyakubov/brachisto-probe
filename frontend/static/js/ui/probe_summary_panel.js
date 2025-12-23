@@ -138,20 +138,26 @@ class ProbeSummaryPanel {
 
         this.gameState = gameState;
 
-        // Calculate total probes - sum across all zones
-        // Use zone-based probe counts (probesByZone) as the source of truth
-        // Legacy probes object is kept for backward compatibility but should not be counted
-        let totalProbes = 0;
-        const probesByZone = gameState.probes_by_zone || {};
-        for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
-            if (zoneProbes && typeof zoneProbes === 'object') {
-                totalProbes += Object.values(zoneProbes).reduce((sum, count) => sum + (count || 0), 0);
+        // Use shared probe count cache to avoid redundant calculations
+        const probeCache = window.probeCountCache;
+        if (probeCache) {
+            probeCache.update(gameState);
+            var totalProbes = probeCache.getTotalProbes();
+        } else {
+            // Fallback: calculate manually if cache not available
+            let totalProbes = 0;
+            const probesByZone = gameState.probes_by_zone || {};
+            for (const [zoneId, zoneProbes] of Object.entries(probesByZone)) {
+                if (zoneProbes && typeof zoneProbes === 'object') {
+                    totalProbes += Object.values(zoneProbes).reduce((sum, count) => sum + (count || 0), 0);
+                }
             }
-        }
-        
-        // Only use legacy probes if probesByZone is empty (backward compatibility for old saves)
-        if (totalProbes === 0) {
-            totalProbes += Object.values(gameState.probes || {}).reduce((sum, count) => sum + (count || 0), 0);
+            
+            // Only use legacy probes if probesByZone is empty (backward compatibility for old saves)
+            // Single probe type only: directly access 'probe' key
+            if (totalProbes === 0) {
+                totalProbes += gameState.probes?.['probe'] || 0;
+            }
         }
         const totalEl = document.getElementById('probe-summary-total');
         if (totalEl) {
@@ -212,13 +218,37 @@ class ProbeSummaryPanel {
         const breakdown = gameState.resource_breakdowns?.dexterity;
         const buildAllocation = gameState.build_allocation || 50;
         
-        // Create cache key from relevant inputs
-        const calculationKey = JSON.stringify({
-            allocations: allocations,
-            allocationsByZone: allocationsByZone,
-            buildAllocation: buildAllocation,
-            roboticBonus: breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0
-        });
+        // Create cache key from relevant inputs (use efficient hash instead of JSON.stringify)
+        let hash = 0;
+        hash = ((hash << 5) - hash) + (buildAllocation || 0);
+        hash = ((hash << 5) - hash) + ((breakdown?.probes?.upgrades?.find(u => u.name === 'Robotic Systems')?.bonus || 0) * 1000);
+        
+        // Hash allocations efficiently
+        for (const [key, alloc] of Object.entries(allocations)) {
+            hash = ((hash << 5) - hash) + key.charCodeAt(0);
+            if (alloc && typeof alloc === 'object') {
+                for (const count of Object.values(alloc)) {
+                    hash = ((hash << 5) - hash) + (count || 0);
+                }
+            }
+        }
+        
+        // Hash allocationsByZone efficiently
+        for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
+            hash = ((hash << 5) - hash) + zoneId.charCodeAt(0);
+            if (zoneAllocs && typeof zoneAllocs === 'object') {
+                for (const [key, alloc] of Object.entries(zoneAllocs)) {
+                    hash = ((hash << 5) - hash) + key.charCodeAt(0);
+                    if (alloc && typeof alloc === 'object') {
+                        for (const count of Object.values(alloc)) {
+                            hash = ((hash << 5) - hash) + (count || 0);
+                        }
+                    }
+                }
+            }
+        }
+        
+        const calculationKey = hash.toString();
         
         // Reuse cached calculations if inputs haven't changed
         if (this.lastCalculationKey !== calculationKey || !this.cachedCalculations) {
@@ -268,28 +298,46 @@ class ProbeSummaryPanel {
                 (allocations.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
             );
             
-            // Zone-based allocations
+            // Zone-based allocations - use probe cache for probe counts
+            const probeCache = window.probeCountCache;
+            const cachedProbes = probeCache ? probeCache.update(gameState) : null;
+            
             for (const [zoneId, zoneAllocs] of Object.entries(allocationsByZone)) {
-                totalDysonProbes += Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
+                // Use cached probe counts if available
+                let zoneDysonProbes = 0;
+                let zoneMiningProbes = 0;
+                let constructProbes = 0;
+                
+                if (cachedProbes) {
+                    // Get probe counts from allocations and cache
+                    const zoneProbeCount = cachedProbes.probesByZone[zoneId] || 0;
+                    const dysonAlloc = zoneAllocs.dyson || 0;
+                    const harvestAlloc = zoneAllocs.harvest || 0;
+                    const constructAlloc = zoneAllocs.construct || 0;
+                    
+                    zoneDysonProbes = Math.floor(zoneProbeCount * dysonAlloc);
+                    zoneMiningProbes = Math.floor(zoneProbeCount * harvestAlloc);
+                    constructProbes = Math.floor(zoneProbeCount * constructAlloc);
+                } else {
+                    // Fallback: calculate from allocations
+                    zoneDysonProbes = Object.values(zoneAllocs.dyson || {}).reduce((sum, count) => sum + (count || 0), 0);
+                    zoneMiningProbes = Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
+                    constructProbes = Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
+                }
+                
+                totalDysonProbes += zoneDysonProbes;
                 totalDysonDexterityPerDay += calculateDexterityRateForProbes(
-                    (zoneAllocs.dyson?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
-                ) + calculateDexterityRateForProbes(
-                    (zoneAllocs.dyson?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                    zoneDysonProbes, PROBE_BUILD_RATE, totalMultiplier
                 );
                 
-                totalMiningProbes += Object.values(zoneAllocs.harvest || {}).reduce((sum, count) => sum + (count || 0), 0);
+                totalMiningProbes += zoneMiningProbes;
                 totalMiningDexterityPerDay += calculateDexterityRateForProbes(
-                    (zoneAllocs.harvest?.probe || 0), PROBE_HARVEST_RATE, totalMultiplier
-                ) + calculateDexterityRateForProbes(
-                    (zoneAllocs.harvest?.miner_probe || 0), PROBE_HARVEST_RATE * 1.5, totalMultiplier
+                    zoneMiningProbes, PROBE_HARVEST_RATE, totalMultiplier
                 );
                 
-                const constructProbes = Object.values(zoneAllocs.construct || {}).reduce((sum, count) => sum + (count || 0), 0);
                 totalProbeConstructProbes += constructProbes;
                 totalProbeConstructDexterityPerDay += calculateDexterityRateForProbes(
-                    (zoneAllocs.construct?.probe || 0), PROBE_BUILD_RATE, totalMultiplier
-                ) + calculateDexterityRateForProbes(
-                    (zoneAllocs.construct?.construction_probe || 0), PROBE_BUILD_RATE * 1.8, totalMultiplier
+                    constructProbes, PROBE_BUILD_RATE, totalMultiplier
                 );
                 
                 // Structure building probes (based on build_allocation slider)

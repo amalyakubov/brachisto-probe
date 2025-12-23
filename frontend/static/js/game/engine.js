@@ -1,3 +1,10 @@
+/** Helper to get global object (works in both main thread and worker) */
+function getGlobal() {
+    if (typeof window !== 'undefined') return window;
+    if (typeof self !== 'undefined') return self;
+    return globalThis;
+}
+
 /** Static Probe class for accessing probe properties */
 class Probe {
     /**
@@ -6,11 +13,13 @@ class Probe {
      * @returns {Object|null} Probe data object or null if not found
      */
     static getData(probeType) {
-        if (!window.gameDataLoader) {
+        // Support both window (main thread) and self (worker) contexts
+        const global = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : globalThis);
+        if (!global.gameDataLoader) {
             // Silently return null - default values will be used by getProperty
             return null;
         }
-        const probes = window.gameDataLoader.getProbes();
+        const probes = global.gameDataLoader.getProbes();
         for (const probe of probes) {
             if (probe.id === probeType) {
                 return probe;
@@ -828,11 +837,11 @@ class GameEngine {
     
     tick(deltaTime) {
         // Start profiling tick time
-        const profiler = window.performanceProfiler;
+        const profiler = getGlobal().performanceProfiler;
         const tickStartTime = profiler ? profiler.startTiming('tick') : null;
         
         // Clear cache invalidated flags at start of tick
-        const cache = window.calculationCache;
+        const cache = getGlobal().calculationCache;
         if (cache) {
             cache.clearInvalidated();
         }
@@ -852,7 +861,8 @@ class GameEngine {
         
         // Debug: Log time increment every 60 ticks (once per second at 60 ticks/sec)
         if (this.tickCount % 60 === 0) {
-            const timeSpeed = typeof window !== 'undefined' && window.gameEngine ? window.gameEngine.timeSpeed : 'unknown';
+            const global = getGlobal();
+            const timeSpeed = global.gameEngine ? global.gameEngine.timeSpeed : 'unknown';
             console.log(`Tick ${this.tickCount}: time=${this.time.toFixed(2)}s, deltaTime=${deltaTime.toFixed(4)}s, timeSpeed=${timeSpeed}`);
         }
         
@@ -1517,7 +1527,7 @@ class GameEngine {
                                     this.structures[buildingId] += 1;
                                     
                                     // Invalidate structure cache
-                                    const cache = window.calculationCache;
+                                    const cache = getGlobal().calculationCache;
                                     if (cache) {
                                         cache.invalidateStructures();
                                     }
@@ -3313,7 +3323,7 @@ class GameEngine {
     }
     _getResearchBonus(treeId, bonusKey, defaultValue = 1.0) {
         // Use cache if available
-        const cache = window.calculationCache;
+        const cache = getGlobal().calculationCache;
         if (cache) {
             return cache.getResearchBonus(treeId, bonusKey, defaultValue, () => {
                 return this._calculateResearchBonus(treeId, bonusKey, defaultValue);
@@ -4103,7 +4113,7 @@ class GameEngine {
         }
         
         // Invalidate structure cache
-        const cache = window.calculationCache;
+        const cache = getGlobal().calculationCache;
         if (cache) {
             cache.invalidateStructures();
         }
@@ -4874,7 +4884,7 @@ class GameEngine {
         const newRatePercentage = actionData.rate_percentage !== undefined ? actionData.rate_percentage : actionData.rate;
         
         if (!newRatePercentage || newRatePercentage <= 0 || newRatePercentage > 100) {
-            throw new Error('Transfer rate must be between 0 and 100 (percentage of current drones per day)');
+            throw new Error('Transfer rate must be between 0 and 100 (percentage of current probes per day)');
         }
         
         const transfer = this.activeTransfers.find(t => t.id == transferId);
@@ -5142,37 +5152,307 @@ class GameEngine {
     }
 }
 
-/** Game engine client-side wrapper - uses local engine instead of API */
+/** Game engine client-side wrapper - uses Web Worker for game calculations */
 class GameEngineClient {
     constructor() {
         this.sessionId = null;
-        this.engine = null;
+        this.worker = null;
+        this.engine = null; // Fallback: engine instance for main thread execution
+        this.gameState = null; // Latest game state from worker
         this.isRunning = false;
-        this.lastTickTime = performance.now();
-        this.tickInterval = null;
-        this.tickRate = 60; // ticks per day - fixed rate
-        this.deltaTime = 1 / this.tickRate; // Fixed delta time per tick in days (1/60 day)
         this.timeSpeed = 1; // Speed multiplier (applied to delta_time, not tick rate)
         this.autoSaveInterval = null;
         this.autoSaveIntervalMs = 60000; // Auto-save every 60 seconds
+        this.pendingActions = new Map(); // Track pending actions with callbacks
+        this.actionIdCounter = 0;
+        this.tickInterval = null; // Fallback: tick interval for main thread
+        this.uiUpdateCounter = 0; // Counter for UI update throttling
+        this.useWorker = false; // Temporarily disable worker to fix loading issue
+        this.workerInitialized = false; // Track if worker has been initialized
+        
+        // Initialize worker (will fall back to main thread if it fails)
+        // Temporarily disabled - worker has issues with importScripts
+        // TODO: Fix worker initialization - importScripts may be causing issues
+        // this.initWorker();
+    }
+    
+    initWorker() {
+        // Prevent multiple initializations
+        if (this.worker || this.workerInitialized) {
+            return;
+        }
+        
+        try {
+            this.worker = new Worker('/static/js/game/engine.worker.js');
+            
+            // Set up message handler
+            this.worker.onmessage = (e) => {
+                this.handleWorkerMessage(e.data);
+            };
+            
+            this.worker.onerror = (error) => {
+                console.error('Worker error:', error);
+                // If worker fails, fall back to main thread execution
+                console.warn('Worker failed, falling back to main thread execution');
+                this.worker = null;
+                this.fallbackToMainThread();
+            };
+            
+            // Initialize worker (no data needed, it uses importScripts)
+            // Only send init once
+            if (!this.workerInitialized) {
+                this.worker.postMessage({
+                    type: 'init',
+                    data: {}
+                });
+            }
+        } catch (error) {
+            console.error('Failed to create worker, falling back to main thread:', error);
+            // Fallback: create engine directly in main thread
+            this.worker = null;
+            this.fallbackToMainThread();
+        }
+    }
+    
+    fallbackToMainThread() {
+        // Fallback: run engine directly in main thread if worker fails
+        console.log('Running game engine in main thread (worker unavailable)');
+        this.useWorker = false;
+        // The engine will be created in start() method
+    }
+    
+    handleWorkerMessage(data) {
+        const { type } = data;
+        
+        switch (type) {
+            case 'initComplete':
+                if (!this.workerInitialized) {
+                    console.log('Worker initialized');
+                    this.workerInitialized = true;
+                }
+                break;
+                
+            case 'startComplete':
+                console.log('Worker started');
+                break;
+                
+            case 'stopComplete':
+                console.log('Worker stopped');
+                break;
+                
+            case 'stateUpdate':
+                // Update stored game state
+                this.gameState = data.gameState;
+                if (data.tickTime) {
+                    // Record tick time if profiler available
+                    const profiler = getGlobal().performanceProfiler;
+                    if (profiler) {
+                        profiler.recordTickTime(data.tickTime);
+                    }
+                }
+                // Emit UI update event
+                this.updateGameState(data.gameState);
+                break;
+                
+            case 'actionComplete':
+                // Handle action completion
+                const actionId = data.actionId;
+                if (this.pendingActions.has(actionId)) {
+                    const { resolve } = this.pendingActions.get(actionId);
+                    this.pendingActions.delete(actionId);
+                    resolve({
+                        success: true,
+                        game_state: data.gameState,
+                        result: data.result
+                    });
+                }
+                // Update state
+                this.gameState = data.gameState;
+                this.updateGameState(data.gameState);
+                break;
+                
+            case 'actionError':
+                // Handle action error
+                const errorActionId = data.actionId;
+                if (this.pendingActions.has(errorActionId)) {
+                    const { reject } = this.pendingActions.get(errorActionId);
+                    this.pendingActions.delete(errorActionId);
+                    reject(new Error(data.error));
+                }
+                break;
+                
+            case 'error':
+                console.error('Worker error:', data.error);
+                break;
+        }
     }
 
     async start(sessionId, config = {}) {
         this.sessionId = sessionId;
-        this.isRunning = true;
-        this.lastTickTime = performance.now();
         
-        // Initialize local engine
-        this.engine = new GameEngine(sessionId, config);
-        await this.engine.initialize();
+        // If worker is not available, fall back to main thread execution
+        if (!this.worker || this.useWorker === false) {
+            return this.startMainThread(sessionId, config);
+        }
+        
+        // Check if we need to load from saved state
+        let engineState = null;
+        try {
+            const savedState = await this.loadGameState(sessionId);
+            if (savedState) {
+                engineState = savedState;
+            }
+        } catch (error) {
+            // No saved state, start fresh
+            console.log('No saved state found, starting fresh game');
+        }
+        
+        // Start worker
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                console.warn('Worker start timeout, falling back to main thread');
+                this.worker = null;
+                this.startMainThread(sessionId, config).then(resolve).catch(reject);
+            }, 5000);
+            
+            const handler = (e) => {
+                if (e.data.type === 'startComplete') {
+                    clearTimeout(timeout);
+                    this.worker.removeEventListener('message', handler);
+                    this.isRunning = true;
+                    this.startAutoSave();
+                    // Store initial state if provided
+                    if (e.data.gameState) {
+                        this.gameState = e.data.gameState;
+                        this.updateGameState(e.data.gameState);
+                    }
+                    resolve();
+                } else if (e.data.type === 'error') {
+                    clearTimeout(timeout);
+                    this.worker.removeEventListener('message', handler);
+                    console.warn('Worker start failed, falling back to main thread:', e.data.error);
+                    this.worker = null;
+                    this.startMainThread(sessionId, config).then(resolve).catch(reject);
+                }
+            };
+            
+            this.worker.addEventListener('message', handler);
+            this.worker.postMessage({
+                type: 'start',
+                data: {
+                    sessionId: sessionId,
+                    config: config,
+                    engineState: engineState
+                }
+            });
+        });
+    }
+    
+    async startMainThread(sessionId, config) {
+        // Fallback: run engine in main thread (original behavior)
+        console.log('Starting game engine in main thread');
+        this.sessionId = sessionId;
+        this.isRunning = true;
+        
+        // Check if we need to load from saved state
+        // Skip loading if this is explicitly a new game (sessionId starts with 'new_game_')
+        // or if config.skipLoadState is true
+        let engineState = null;
+        const skipLoadState = config.skipLoadState === true || sessionId.startsWith('new_game_');
+        
+        if (!skipLoadState) {
+            try {
+                const savedState = await this.loadGameState(sessionId);
+                if (savedState) {
+                    engineState = savedState;
+                    console.log('Loading saved game state');
+                }
+            } catch (error) {
+                // No saved state, start fresh
+                console.log('No saved state found, starting fresh game');
+            }
+        } else {
+            console.log('Starting fresh game (skipLoadState=true or new_game session)');
+        }
+        
+        // Create engine directly
+        if (engineState) {
+            this.engine = await GameEngine.loadFromState(sessionId, config, engineState);
+        } else {
+            this.engine = new GameEngine(sessionId, config);
+            await this.engine.initialize();
+        }
         
         // Use fixed interval: tick at exactly 60 ticks per second (every ~16.67ms)
-        const tickIntervalMs = 1000 / this.tickRate; // ~16.67ms for 60 ticks/sec
-        console.log('Starting game tick interval:', tickIntervalMs, 'ms, tickRate:', this.tickRate);
+        const tickRate = 60;
+        const tickIntervalMs = 1000 / tickRate; // ~16.67ms for 60 ticks/sec
+        console.log('Starting game tick interval:', tickIntervalMs, 'ms, tickRate:', tickRate);
         this.tickInterval = setInterval(() => this.tick(), tickIntervalMs);
         
         // Start auto-save
         this.startAutoSave();
+        
+        // Get initial state
+        this.gameState = this.engine.getState();
+        this.updateGameState(this.gameState);
+    }
+    
+    tick() {
+        if (!this.isRunning || !this.engine) {
+            return;
+        }
+        
+        try {
+            // Always tick at fixed rate (60 ticks/day)
+            const DAYS_PER_TICK = 1.0 / 60.0; // 1 day / 60 ticks
+            const effectiveDeltaTimeDays = DAYS_PER_TICK * this.timeSpeed;
+            
+            // Ensure effectiveDeltaTimeDays is valid
+            if (!effectiveDeltaTimeDays || effectiveDeltaTimeDays <= 0 || 
+                isNaN(effectiveDeltaTimeDays) || !isFinite(effectiveDeltaTimeDays)) {
+                console.warn('Invalid effectiveDeltaTimeDays:', effectiveDeltaTimeDays, 'timeSpeed:', this.timeSpeed);
+                return;
+            }
+            
+            // Execute single tick with time-scaled delta_time in days
+            const tickStartTime = performance.now();
+            this.engine.tick(effectiveDeltaTimeDays);
+            const tickEndTime = performance.now();
+            
+            // Record tick time
+            const profiler = getGlobal().performanceProfiler;
+            if (profiler) {
+                profiler.recordTickTime(tickEndTime - tickStartTime);
+            }
+            
+            // Emit game state update event (batched - only every N ticks)
+            if (!this.uiUpdateCounter) {
+                this.uiUpdateCounter = 0;
+            }
+            this.uiUpdateCounter++;
+            
+            // Update UI every 2 ticks (30fps instead of 60fps)
+            const updateUI = this.uiUpdateCounter >= 2;
+            
+            if (updateUI) {
+                this.uiUpdateCounter = 0;
+                const gameState = this.engine.getState();
+                if (gameState) {
+                    // Record memory usage
+                    if (profiler) {
+                        profiler.recordMemoryUsage(gameState);
+                    }
+                    this.gameState = gameState;
+                    this.updateGameState(gameState);
+                } else {
+                    console.warn('GameEngineClient.tick(): getState() returned null/undefined');
+                }
+            }
+        } catch (error) {
+            console.error('Error in game tick:', error);
+            console.error('Error stack:', error.stack);
+            // Don't stop the game, but log the error
+        }
     }
     
     startAutoSave() {
@@ -5197,11 +5477,11 @@ class GameEngineClient {
     }
     
     async saveGameState() {
-        if (!this.engine) {
+        if (!this.gameState) {
             return;
         }
         
-        const gameState = this.engine.getState();
+        const gameState = this.gameState;
         
         // Save to IndexedDB (local storage)
         try {
@@ -5215,8 +5495,14 @@ class GameEngineClient {
             // Continue even if local save fails
         }
         
-        // Save to backend (cloud sync) - only if sessionId is not 'local'
-        if (this.sessionId && this.sessionId !== 'local' && typeof api !== 'undefined') {
+        // Save to backend (cloud sync) - only if sessionId is a numeric ID (not 'local' or 'new_game_*')
+        // Backend expects integer session IDs, so skip string IDs like 'new_game_...'
+        const isNumericSessionId = this.sessionId && 
+                                   this.sessionId !== 'local' && 
+                                   !this.sessionId.toString().startsWith('new_game_') &&
+                                   !isNaN(parseInt(this.sessionId));
+        
+        if (isNumericSessionId && typeof api !== 'undefined') {
             try {
                 await api.saveGameState(this.sessionId, gameState);
                 console.log('Game state saved to backend');
@@ -5224,6 +5510,9 @@ class GameEngineClient {
                 // Log warning but don't throw - backend save is optional
                 console.warn('Failed to save game state to backend (continuing with local save):', error);
             }
+        } else if (this.sessionId && (this.sessionId === 'local' || this.sessionId.toString().startsWith('new_game_'))) {
+            // Local game - skip backend save silently
+            console.log('Local game - skipping backend save');
         }
     }
     
@@ -5244,111 +5533,148 @@ class GameEngineClient {
     
     async loadFromState(sessionId, config, state) {
         this.sessionId = sessionId;
+        
+        // If worker is not available, fall back to main thread execution
+        if (!this.worker || this.useWorker === false) {
+            return this.loadFromStateMainThread(sessionId, config, state);
+        }
+        
+        // Start worker with saved state
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                console.warn('Worker start timeout, falling back to main thread');
+                this.worker = null;
+                this.loadFromStateMainThread(sessionId, config, state).then(resolve).catch(reject);
+            }, 5000);
+            
+            const handler = (e) => {
+                if (e.data.type === 'startComplete') {
+                    clearTimeout(timeout);
+                    this.worker.removeEventListener('message', handler);
+                    this.isRunning = true;
+                    this.startAutoSave();
+                    resolve(this.gameState);
+                } else if (e.data.type === 'error') {
+                    clearTimeout(timeout);
+                    this.worker.removeEventListener('message', handler);
+                    console.warn('Worker start failed, falling back to main thread:', e.data.error);
+                    this.worker = null;
+                    this.loadFromStateMainThread(sessionId, config, state).then(resolve).catch(reject);
+                }
+            };
+            
+            this.worker.addEventListener('message', handler);
+            this.worker.postMessage({
+                type: 'start',
+                data: {
+                    sessionId: sessionId,
+                    config: config,
+                    engineState: state
+                }
+            });
+        });
+    }
+    
+    async loadFromStateMainThread(sessionId, config, state) {
+        // Fallback: load game in main thread
+        console.log('Loading game in main thread');
+        this.sessionId = sessionId;
+        this.isRunning = true;
+        
+        // Load engine from state
         this.engine = await GameEngine.loadFromState(sessionId, config, state);
-        return this.engine;
+        
+        // Use fixed interval: tick at exactly 60 ticks per second (every ~16.67ms)
+        const tickRate = 60;
+        const tickIntervalMs = 1000 / tickRate; // ~16.67ms for 60 ticks/sec
+        console.log('Starting game tick interval:', tickIntervalMs, 'ms, tickRate:', tickRate);
+        this.tickInterval = setInterval(() => this.tick(), tickIntervalMs);
+        
+        // Start auto-save
+        this.startAutoSave();
+        
+        // Get initial state
+        this.gameState = this.engine.getState();
+        this.updateGameState(this.gameState);
+        
+        return this.gameState;
     }
 
     stop() {
         this.isRunning = false;
-        if (this.tickInterval) {
-            clearInterval(this.tickInterval);
-            this.tickInterval = null;
-        }
         this.stopAutoSave();
         
         // Save state before stopping
-        if (this.engine) {
+        if (this.gameState) {
             this.saveGameState().catch(err => {
                 console.error('Failed to save game state on stop:', err);
             });
         }
-    }
-
-    tick() {
-        if (!this.isRunning) {
-            return;
-        }
         
-        if (!this.engine) {
-            console.warn('GameEngineClient.tick(): engine is null');
-            return;
+        // Stop worker or main thread tick
+        if (this.worker) {
+            this.worker.postMessage({ type: 'stop' });
         }
-
-        try {
-            // Always tick at fixed rate (60 ticks/day)
-            // Time system: fundamental unit is 1 day
-            // Each tick = 1/60 day (at 1x speed)
-            // At 100x speed: 100 days per tick
-            // deltaTime is in days (1/60 at 60 ticks/day), apply time speed
-            const DAYS_PER_TICK = 1.0 / 60.0; // 1 day / 60 ticks
-            const effectiveDeltaTimeDays = DAYS_PER_TICK * this.timeSpeed;
-            
-            // Ensure effectiveDeltaTimeDays is valid
-            if (!effectiveDeltaTimeDays || effectiveDeltaTimeDays <= 0 || isNaN(effectiveDeltaTimeDays) || !isFinite(effectiveDeltaTimeDays)) {
-                console.warn('Invalid effectiveDeltaTimeDays:', effectiveDeltaTimeDays, 'timeSpeed:', this.timeSpeed);
-                return;
-            }
-            
-            // Execute single tick with time-scaled delta_time in days
-            const tickStartTime = performance.now();
-            this.engine.tick(effectiveDeltaTimeDays);
-            const tickEndTime = performance.now();
-            
-            // Record tick time
-            const profiler = window.performanceProfiler;
-            if (profiler) {
-                profiler.recordTickTime(tickEndTime - tickStartTime);
-            }
-            
-            // Emit game state update event (batched - only every N ticks)
-            // Phase 4: Batch updates - update UI less frequently
-            if (!this.uiUpdateCounter) {
-                this.uiUpdateCounter = 0;
-            }
-            this.uiUpdateCounter++;
-            
-            // Update UI every 2 ticks (30fps instead of 60fps)
-            const updateUI = this.uiUpdateCounter >= 2;
-            
-            if (updateUI) {
-                this.uiUpdateCounter = 0;
-                const gameState = this.engine.getState();
-                if (gameState) {
-                    // Record memory usage
-                    if (profiler) {
-                        profiler.recordMemoryUsage(gameState);
-                    }
-                    this.updateGameState(gameState);
-                } else {
-                    console.warn('GameEngineClient.tick(): getState() returned null/undefined');
-                }
-            }
-        } catch (error) {
-            console.error('Error in game tick:', error);
-            console.error('Error stack:', error.stack);
-            // Don't stop the game, but log the error
+        if (this.tickInterval) {
+            clearInterval(this.tickInterval);
+            this.tickInterval = null;
         }
     }
+
+    // Tick is now handled by worker - this method removed
 
     updateGameState(newState) {
         // Emit event for UI updates
-        window.dispatchEvent(new CustomEvent('gameStateUpdate', { detail: newState }));
+        // Only dispatch events in main thread (not in worker)
+        const global = getGlobal();
+        if (typeof global.dispatchEvent !== 'undefined') {
+            global.dispatchEvent(new CustomEvent('gameStateUpdate', { detail: newState }));
+        }
     }
 
     async performAction(actionType, actionData) {
-        if (!this.engine) {
-            throw new Error('No active game engine');
+        // If using main thread fallback, perform action directly
+        if (!this.worker || this.useWorker === false) {
+            if (!this.engine || !this.isRunning) {
+                throw new Error('Engine not running');
+            }
+            try {
+                const result = this.engine.performAction(actionType, actionData);
+                // Update UI with new state
+                this.gameState = this.engine.getState();
+                this.updateGameState(this.gameState);
+                return Promise.resolve({ success: true, game_state: this.gameState, result: result });
+            } catch (error) {
+                console.error('Action failed:', error);
+                return Promise.reject(error);
+            }
+        }
+        
+        if (!this.isRunning) {
+            throw new Error('Worker not running');
         }
 
-        try {
-            const result = this.engine.performAction(actionType, actionData);
-            // Update UI with new state
-            this.updateGameState(this.engine.getState());
-            return Promise.resolve({ success: true, game_state: this.engine.getState(), result: result });
-        } catch (error) {
-            console.error('Action failed:', error);
-            return Promise.reject(error);
-        }
+        return new Promise((resolve, reject) => {
+            const actionId = ++this.actionIdCounter;
+            this.pendingActions.set(actionId, { resolve, reject });
+            
+            this.worker.postMessage({
+                type: 'action',
+                data: {
+                    actionId: actionId,
+                    actionType: actionType,
+                    actionData: actionData
+                }
+            });
+            
+            // Timeout after 5 seconds
+            setTimeout(() => {
+                if (this.pendingActions.has(actionId)) {
+                    this.pendingActions.delete(actionId);
+                    reject(new Error('Action timeout'));
+                }
+            }, 5000);
+        });
     }
 
     purchaseStructure(buildingId, zoneId = 'earth') {
@@ -5386,25 +5712,41 @@ class GameEngineClient {
     }
 
     getGameState() {
-        return this.engine ? this.engine.getState() : null;
+        return this.gameState;
     }
 
     isComplete() {
-        return this.engine && this.engine.dysonSphereMass >= this.engine.getDysonTargetMass();
+        return this.gameState && this.gameState.dyson_sphere_progress >= 1.0;
     }
     
     setTimeSpeed(speed) {
         this.timeSpeed = Math.max(0.1, Math.min(1000, speed)); // Limit between 0.1x and 1000x
+        if (this.worker && this.useWorker !== false) {
+            this.worker.postMessage({
+                type: 'setTimeSpeed',
+                data: { speed: this.timeSpeed }
+            });
+        }
     }
 }
 
 // Export singleton instance - runs entirely locally in JavaScript
 // All time calculations, ticks, and game logic happen client-side
-const gameEngine = new GameEngineClient();
-
-// Expose globally for access from other scripts
-if (typeof window !== 'undefined') {
-    window.gameEngine = gameEngine;
+// Only create instance in main thread, not in worker
+// Workers have self but no document, so check for document to distinguish
+const isMainThread = typeof window !== 'undefined' || 
+                     (typeof self !== 'undefined' && typeof self.document !== 'undefined' && typeof self.importScripts === 'undefined');
+                     
+if (isMainThread) {
+    // Main thread - create and expose gameEngine
+    const gameEngine = new GameEngineClient();
+    
+    // Expose globally for access from other scripts (main thread only)
+    if (typeof window !== 'undefined') {
+        window.gameEngine = gameEngine;
+    } else if (typeof self !== 'undefined' && typeof self.document !== 'undefined') {
+        self.gameEngine = gameEngine;
+    }
 }
 
 if (typeof module !== 'undefined' && module.exports) {

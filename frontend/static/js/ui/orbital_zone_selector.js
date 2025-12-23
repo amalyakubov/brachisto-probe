@@ -10,6 +10,11 @@ class OrbitalZoneSelector {
         this.currentTransferDialog = null; // Reference to open transfer dialog
         this.probeDots = {}; // Track probe dots per zone: {zoneId: [dots]}
         this.transferArcs = []; // Active transfer arcs: [{from, to, type, count, rate, ...}]
+        
+        // Performance optimization: Throttle probe visualization updates
+        this.probeUpdateFrameCount = 0; // Frame counter for probe UI updates
+        this.lastProbeCounts = null; // Cache last probe counts to detect changes
+        
         this.init();
         this.loadData();
         this.setupKeyboardShortcuts();
@@ -191,12 +196,18 @@ class OrbitalZoneSelector {
             const tileCenter = (index * (tileWidth + tileGap)) + (tileWidth / 2);
             const tileLeft = tileCenter - (totalTilesWidthWithGaps / 2);
             
-            // Calculate probe count for this zone
+            // Calculate probe count for this zone (use cache if available)
             let probeCount = 0;
-            const probesByZone = (this.gameState && this.gameState.probes_by_zone) ? 
-                this.gameState.probes_by_zone[zone.id] || {} : {};
-            for (const [probeType, count] of Object.entries(probesByZone)) {
-                probeCount += count;
+            const probeCache = window.probeCountCache;
+            if (probeCache && this.gameState) {
+                probeCache.update(this.gameState);
+                probeCount = probeCache.getZoneProbeCount(zone.id);
+            } else {
+                const probesByZone = (this.gameState && this.gameState.probes_by_zone) ? 
+                    this.gameState.probes_by_zone[zone.id] || {} : {};
+                for (const [probeType, count] of Object.entries(probesByZone)) {
+                    probeCount += count;
+                }
             }
             
             // Calculate Dyson swarm mass for this zone (if applicable)
@@ -503,10 +514,8 @@ class OrbitalZoneSelector {
         const probesByZone = this.gameState.probes_by_zone || {};
         const zoneProbes = probesByZone[zoneId] || {};
         const PROBE_ENERGY_CONSUMPTION = 100000; // 100kW per probe
-        let probeCount = 0;
-        for (const count of Object.values(zoneProbes)) {
-            probeCount += (count || 0);
-        }
+        // Single probe type only: directly access 'probe' key
+        const probeCount = zoneProbes['probe'] || 0;
         consumption += probeCount * PROBE_ENERGY_CONSUMPTION;
         
         // Energy consumption from activities in this zone
@@ -592,7 +601,7 @@ class OrbitalZoneSelector {
         let totalProbeMass = 0;
         let probesPerDay = 0;
         let dysonBuildRate = 0; // kg/day for dyson zone
-        let droneProductionRate = 0; // probes/day from structures in dyson zone
+        let probeProductionRate = 0; // probes/day from structures in dyson zone
         let metalRemaining = 0;
         let massRemaining = 0;
         let slagProduced = 0;
@@ -603,10 +612,10 @@ class OrbitalZoneSelector {
             // Get probes in this zone
             const probesByZone = this.gameState.probes_by_zone || {};
             const zoneProbes = probesByZone[zoneId] || {};
-            for (const [probeType, count] of Object.entries(zoneProbes)) {
-                numProbes += (count || 0);
-                totalProbeMass += (count || 0) * Config.PROBE_MASS; // Config.PROBE_MASS = 100 kg
-            }
+            // Single probe type only: directly access 'probe' key
+            const probeCount = zoneProbes['probe'] || 0;
+            numProbes += probeCount;
+            totalProbeMass += probeCount * Config.PROBE_MASS; // Config.PROBE_MASS = 100 kg
             
             // Get probe allocations for this zone
             const probeAllocationsByZone = this.gameState.probe_allocations_by_zone || {};
@@ -621,14 +630,14 @@ class OrbitalZoneSelector {
                     dysonBuildRate = dysonProbes * PROBE_BUILD_RATE;
                 }
                 
-                // Calculate drone production from structures (factories) in dyson zone
+                // Calculate probe production from structures (factories) in dyson zone
                 const structuresByZone = this.gameState.structures_by_zone || {};
                 const zoneStructures = structuresByZone[zoneId] || {};
                 const factoryProductionByZone = this.gameState.factory_production_by_zone || {};
                 const zoneFactoryProduction = factoryProductionByZone[zoneId] || {};
                 
                 if (zoneFactoryProduction.rate) {
-                    droneProductionRate = zoneFactoryProduction.rate; // probes/s
+                    probeProductionRate = zoneFactoryProduction.rate; // probes/s
                 }
             } else {
                 // Regular zone: calculate mining rate
@@ -743,8 +752,33 @@ class OrbitalZoneSelector {
         panel.style.left = `${leftPos}px`;
         panel.style.top = `${topPos}px`;
         
-        // Build tooltip content based on zone type
+        // Change detection: Cache tooltip content to avoid unnecessary regeneration
+        const tooltipData = {
+            zoneId: zone.id,
+            metalRemaining: zoneMetalRemaining,
+            massRemaining: zoneMassRemaining,
+            numProbes: numProbes,
+            structures: structuresCount,
+            zoneEnergy: zoneEnergy,
+            dysonBuildRate: dysonBuildRate,
+            probeProductionRate: probeProductionRate,
+            probesPerDay: probesPerDay,
+            metalMiningRate: metalMiningRate,
+            slagMiningRate: slagMiningRate
+        };
+        const tooltipHash = JSON.stringify(tooltipData);
+        const tooltipCacheKey = `tooltip_${zone.id}_cache`;
+        
+        // Only regenerate tooltip if data changed
         let tooltipContent = '';
+        if (tooltipHash === this[tooltipCacheKey] && this[tooltipCacheKey] !== null) {
+            // Use cached content if available
+            const cachedPanel = document.getElementById('zone-info-panel');
+            if (cachedPanel && cachedPanel.innerHTML) {
+                return; // Tooltip already up to date, skip regeneration
+            }
+        }
+        this[tooltipCacheKey] = tooltipHash;
         
         if (isDysonZone) {
             // Dyson zone tooltip
@@ -768,10 +802,10 @@ class OrbitalZoneSelector {
                     <div class="probe-summary-label">Dyson Construction Rate</div>
                     <div class="probe-summary-value">${formatRate(dysonBuildRate, 'kg')}</div>
                 </div>
-                ${droneProductionRate > 0 ? `
+                ${probeProductionRate > 0 ? `
                 <div class="probe-summary-item">
-                    <div class="probe-summary-label">Drone Production</div>
-                    <div class="probe-summary-value">${formatRate(droneProductionRate, 'probes')}</div>
+                    <div class="probe-summary-label">Probe Production</div>
+                    <div class="probe-summary-value">${formatRate(probeProductionRate, 'probes')}</div>
                 </div>
                 ` : ''}
                 ${probesPerDay > 0 ? `
@@ -977,9 +1011,8 @@ class OrbitalZoneSelector {
         let availableProbes = 0;
         if (this.gameState && this.gameState.probes_by_zone) {
             const zoneProbes = this.gameState.probes_by_zone[fromZoneId] || {};
-            for (const count of Object.values(zoneProbes)) {
-                availableProbes += count;
-            }
+            // Single probe type only: directly access 'probe' key
+            availableProbes += zoneProbes['probe'] || 0;
         }
         
         // Create dialog
@@ -1325,92 +1358,128 @@ class OrbitalZoneSelector {
     }
 
     update(gameState) {
+        if (!gameState) return;
+        
+        // Change detection: Only re-render if zone selection or zone data has changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        let hash = 0;
+        if (this.selectedZone) {
+            for (let i = 0; i < this.selectedZone.length; i++) {
+                hash = ((hash << 5) - hash) + this.selectedZone.charCodeAt(i);
+            }
+        }
+        if (this.transferSourceZone) {
+            for (let i = 0; i < this.transferSourceZone.length; i++) {
+                hash = ((hash << 5) - hash) + this.transferSourceZone.charCodeAt(i);
+            }
+        }
+        hash = ((hash << 5) - hash) + (this.waitingForTransferDestination ? 1 : 0);
+        
+        // Hash metal remaining efficiently
+        const metalRemaining = gameState.zone_metal_remaining || {};
+        for (const [zoneId, value] of Object.entries(metalRemaining)) {
+            hash = ((hash << 5) - hash) + zoneId.charCodeAt(0);
+            hash = ((hash << 5) - hash) + (value || 0);
+        }
+        
+        const currentHash = hash.toString();
+        
+        // Always update gameState, but only render if structure changed
+        const needsRender = currentHash !== this.lastRenderHash || this.lastRenderHash === null;
+        if (needsRender) {
+            this.render();
+            this.lastRenderHash = currentHash;
+        }
+        
         this.gameState = gameState;
-        // Don't override selected zone from game state - let user selection persist
-        // if (gameState.harvest_zone) {
-        //     this.selectedZone = gameState.harvest_zone;
-        // }
-        this.render();
-        this.updateProbeDots();
+        
+        // Throttle probe visualization updates to every 30 frames (~2/sec)
+        if (!this.probeUpdateFrameCount) {
+            this.probeUpdateFrameCount = 0;
+        }
+        this.probeUpdateFrameCount++;
+        
+        if (this.probeUpdateFrameCount % 30 === 0) {
+            this.updateProbeDots();
+        }
+        
         this.updateTransferArcs();
     }
     
     updateProbeDots() {
         if (!this.gameState || !this.orbitalZones) return;
         
-        // First, calculate total probes across all zones
-        let totalProbes = 0;
-        const probesByZone = this.gameState.probes_by_zone || {};
-        const zoneProbeCounts = {};
+        // Use shared probe cache - it already calculated everything efficiently
+        const probeCache = window.probeCountCache;
+        if (!probeCache) return;
         
-        this.orbitalZones.forEach(zone => {
-            const zoneProbes = probesByZone[zone.id] || {};
-            let zoneProbeCount = 0;
-            for (const count of Object.values(zoneProbes)) {
-                zoneProbeCount += count || 0;
-            }
-            zoneProbeCounts[zone.id] = zoneProbeCount;
-            totalProbes += zoneProbeCount;
-        });
+        // Update cache (will only recalculate if probe data changed)
+        const cachedData = probeCache.update(this.gameState);
+        const totalProbes = cachedData.totalProbes;
+        const zoneProbeCounts = cachedData.probesByZone;
         
-        // Maximum dots to show across all zones
-        const MAX_TOTAL_DOTS = 200;
+        // Change detection: Only update if probe counts have changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        let countsHash = 0;
+        for (const [zoneId, count] of Object.entries(zoneProbeCounts)) {
+            countsHash = ((countsHash << 5) - countsHash) + zoneId.charCodeAt(0);
+            countsHash = ((countsHash << 5) - countsHash) + (count || 0);
+        }
+        const countsKey = countsHash.toString();
+        if (countsKey === this.lastProbeCounts) {
+            return; // No changes, skip DOM manipulation
+        }
+        this.lastProbeCounts = countsKey;
         
-        // Distribute dots proportionally across zones
-        this.orbitalZones.forEach(zone => {
-            const planetSquare = this.container.querySelector(`.orbital-zone-planet-square-float[data-zone="${zone.id}"]`);
-            if (!planetSquare) return;
+            // Maximum dots to show per zone (reduced to prevent DOM overload)
+            const MAX_DOTS_PER_ZONE = 50; // Reduced from 200 to prevent crashes
             
-            let container = planetSquare.querySelector('.orbital-zone-probe-dots-container');
-            if (!container) {
-                // Create container if it doesn't exist
-                container = document.createElement('div');
-                container.className = 'orbital-zone-probe-dots-container';
-                container.setAttribute('data-zone', zone.id);
-                planetSquare.appendChild(container);
-            }
-            
-            // Calculate probe count for this zone
-            const probeCount = zoneProbeCounts[zone.id] || 0;
-            
-            // Clear existing dots
-            container.innerHTML = '';
-            
-            // If no probes in zone, don't draw any
-            if (probeCount === 0) return;
-            
-            // Calculate number of probe dots to draw for this zone
-            let totalDots = 0;
-            
-            if (totalProbes < 100) {
-                // Low population: draw exact count for each zone (accurate representation)
-                totalDots = Math.floor(probeCount);
-            } else {
-                // High population: proportional representation
-                // Always draw at least 1 probe if zone has probes
-                totalDots = 1;
+            // Distribute dots proportionally across zones
+            this.orbitalZones.forEach(zone => {
+                const planetSquare = this.container.querySelector(`.orbital-zone-planet-square-float[data-zone="${zone.id}"]`);
+                if (!planetSquare) return;
                 
-                // Draw up to 9 more probes if zone has 2-10 probes
-                // This ensures zones with 1-10 probes get 1-10 dots accurately
-                if (probeCount >= 2 && probeCount <= 10) {
-                    const additionalDots = Math.min(9, Math.floor(probeCount) - 1);
-                    totalDots += additionalDots;
-                } else if (probeCount > 10) {
-                    // For zones with more than 10 probes, draw the base 10 dots
-                    totalDots = 10;
-                    
-                    // Then for every 1% of total probes, draw 1 more probe
-                    // This provides proportional representation for larger populations
-                    const zonePercentage = (probeCount / totalProbes) * 100;
-                    const percentageBasedDots = Math.floor(zonePercentage);
-                    totalDots += percentageBasedDots;
+                let container = planetSquare.querySelector('.orbital-zone-probe-dots-container');
+                if (!container) {
+                    // Create container if it doesn't exist
+                    container = document.createElement('div');
+                    container.className = 'orbital-zone-probe-dots-container';
+                    container.setAttribute('data-zone', zone.id);
+                    planetSquare.appendChild(container);
                 }
                 
-                // Cap at 100-200 probes per planet (use 200 as max)
-                totalDots = Math.min(totalDots, 200);
-            }
-            
-            if (totalDots === 0) return;
+                // Calculate probe count for this zone
+                const probeCount = zoneProbeCounts[zone.id] || 0;
+                
+                // Clear existing dots efficiently
+                while (container.firstChild) {
+                    container.removeChild(container.firstChild);
+                }
+                
+                // If no probes in zone, don't draw any
+                if (probeCount === 0) return;
+                
+                // Calculate number of probe dots to draw for this zone
+                // Use logarithmic scaling to prevent too many dots
+                let totalDots = 0;
+                
+                if (totalProbes < 100) {
+                    // Low population: draw exact count (capped)
+                    totalDots = Math.min(Math.floor(probeCount), MAX_DOTS_PER_ZONE);
+                } else if (totalProbes < 10000) {
+                    // Medium population: logarithmic scaling
+                    // Base dots + log scale
+                    const baseDots = Math.min(10, Math.floor(probeCount));
+                    const logScale = Math.floor(Math.log10(Math.max(1, probeCount / 10)) * 5);
+                    totalDots = Math.min(baseDots + logScale, MAX_DOTS_PER_ZONE);
+                } else {
+                    // High population: very limited dots
+                    // Use square root scaling to keep dots manageable
+                    const sqrtScale = Math.floor(Math.sqrt(probeCount / 100));
+                    totalDots = Math.min(Math.max(1, sqrtScale), MAX_DOTS_PER_ZONE);
+                }
+                
+                if (totalDots === 0) return;
             
             // Create floating dots around the planet square
             // Multiple concentric circles that fill up sequentially
@@ -1425,6 +1494,9 @@ class OrbitalZoneSelector {
                 { radius: baseRadius + 16, maxDots: 25 }, // Circle 3: constant spacing
                 { radius: baseRadius + 24, maxDots: 30 }  // Circle 4: constant spacing
             ];
+            
+            // Use DocumentFragment for efficient batch DOM insertion
+            const fragment = document.createDocumentFragment();
             
             // Distribute dots across circles, filling each circle before moving to the next
             let dotsRemaining = totalDots;
@@ -1450,39 +1522,71 @@ class OrbitalZoneSelector {
                     dot.style.top = `calc(50% + ${y}px)`;
                     dot.style.animationDelay = `${animationDelay}s`;
                     
-                    container.appendChild(dot);
+                    fragment.appendChild(dot);
                 }
                 
                 dotsRemaining -= dotsInThisCircle;
                 circleIndex++;
             }
+            
+            // Single DOM operation to add all dots
+            container.appendChild(fragment);
         });
     }
     
     updateTransferArcs() {
         // Get active transfers from game state
-        if (this.gameState && this.gameState.active_transfers) {
-            const currentTime = this.gameState.time || 0;
-            // Filter out completed one-time transfers
-            this.transferArcs = this.gameState.active_transfers.filter(transfer => {
-                // Keep continuous transfers and incomplete one-time transfers
-                if (transfer.type === 'continuous') {
-                    return true;
-                }
-                // For one-time transfers, check if they've arrived
-                if (transfer.type === 'one-time') {
-                    // If arrivalTime is set and hasn't been reached yet, transfer is still active
-                    if (transfer.arrivalTime !== undefined) {
-                        return transfer.arrivalTime > currentTime;
-                    }
-                    // Fallback: check progress (for backward compatibility)
-                    const progress = transfer.progress || 0;
-                    const totalCount = transfer.totalCount || transfer.count || 0;
-                    return progress < totalCount;
-                }
-                return true;
-            });
+        if (!this.gameState || !this.gameState.active_transfers) {
+            // Clear arcs if no transfers
+            const svgContainer = this.container.querySelector('.transfer-arc-svg-container');
+            if (svgContainer && this.transferArcs && this.transferArcs.length > 0) {
+                svgContainer.innerHTML = '';
+                this.transferArcs = [];
+            }
+            return;
         }
+        
+        const currentTime = this.gameState.time || 0;
+        // Filter out completed one-time transfers
+        const newTransferArcs = this.gameState.active_transfers.filter(transfer => {
+            // Keep continuous transfers and incomplete one-time transfers
+            if (transfer.type === 'continuous') {
+                return true;
+            }
+            // For one-time transfers, check if they've arrived
+            if (transfer.type === 'one-time') {
+                // If arrivalTime is set and hasn't been reached yet, transfer is still active
+                if (transfer.arrivalTime !== undefined) {
+                    return transfer.arrivalTime > currentTime;
+                }
+                // Fallback: check progress (for backward compatibility)
+                const progress = transfer.progress || 0;
+                const totalCount = transfer.totalCount || transfer.count || 0;
+                return progress < totalCount;
+            }
+            return true;
+        });
+        
+        // Change detection: Only update if transfers have changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        let hash = 0;
+        for (const transfer of newTransferArcs) {
+            hash = ((hash << 5) - hash) + (transfer.id || 0);
+            const from = transfer.from_zone || transfer.from || '';
+            const to = transfer.to_zone || transfer.to || '';
+            for (let i = 0; i < from.length; i++) {
+                hash = ((hash << 5) - hash) + from.charCodeAt(i);
+            }
+            for (let i = 0; i < to.length; i++) {
+                hash = ((hash << 5) - hash) + to.charCodeAt(i);
+            }
+        }
+        const transfersHash = hash.toString();
+        if (transfersHash === this.lastTransferArcsHash && this.lastTransferArcsHash !== null) {
+            return; // No changes, skip DOM manipulation
+        }
+        this.lastTransferArcsHash = transfersHash;
+        this.transferArcs = newTransferArcs;
         
         // Clear existing transfer arcs
         const svgContainer = this.container.querySelector('.transfer-arc-svg-container');

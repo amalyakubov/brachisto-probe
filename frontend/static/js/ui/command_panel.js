@@ -784,6 +784,40 @@ class CommandPanel {
     }
 
     update(gameState) {
+        if (!gameState) return;
+        
+        // Change detection: Only update if relevant data has changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        let hash = 0;
+        if (this.selectedZone) {
+            for (let i = 0; i < this.selectedZone.length; i++) {
+                hash = ((hash << 5) - hash) + this.selectedZone.charCodeAt(i);
+            }
+        }
+        
+        // Hash allocations efficiently (sum values instead of stringifying)
+        const allocationsByZone = gameState.probe_allocations_by_zone || {};
+        for (const [zoneId, allocations] of Object.entries(allocationsByZone)) {
+            hash = ((hash << 5) - hash) + zoneId.charCodeAt(0);
+            if (allocations && typeof allocations === 'object') {
+                for (const value of Object.values(allocations)) {
+                    if (typeof value === 'object' && value !== null) {
+                        for (const count of Object.values(value)) {
+                            hash = ((hash << 5) - hash) + (count || 0);
+                        }
+                    }
+                }
+            }
+        }
+        
+        const currentHash = hash.toString();
+        
+        if (currentHash === this.lastUpdateHash && this.lastUpdateHash !== null && this.selectedZone === this.lastSelectedZone) {
+            return; // No changes, skip update
+        }
+        this.lastUpdateHash = currentHash;
+        this.lastSelectedZone = this.selectedZone;
+        
         this.gameState = gameState;
 
         if (!this.container) return;
@@ -813,31 +847,56 @@ class CommandPanel {
             }
         }
         
-        // Render sliders for selected zone
+        // Render sliders for selected zone (only if zone changed)
         if (this.selectedZone) {
-            // Try multiple ways to get zones
-            let zones = [];
-            if (window.orbitalZoneSelector && window.orbitalZoneSelector.orbitalZones) {
-                zones = window.orbitalZoneSelector.orbitalZones;
-            } else if (window.app && window.app.orbitalZoneSelector && window.app.orbitalZoneSelector.orbitalZones) {
-                zones = window.app.orbitalZoneSelector.orbitalZones;
-            }
-            
-            const zone = zones.find(z => z.id === this.selectedZone);
-            if (zone) {
-                this.renderSlidersForZone(this.selectedZone, zone);
-                this.renderAllocations(this.selectedZone);
-                this.renderBuildings(this.selectedZone);
+            // Only re-render sliders if zone selection changed
+            if (this.selectedZone !== this.lastRenderedZone) {
+                // Try multiple ways to get zones
+                let zones = [];
+                if (window.orbitalZoneSelector && window.orbitalZoneSelector.orbitalZones) {
+                    zones = window.orbitalZoneSelector.orbitalZones;
+                } else if (window.app && window.app.orbitalZoneSelector && window.app.orbitalZoneSelector.orbitalZones) {
+                    zones = window.app.orbitalZoneSelector.orbitalZones;
+                }
+                
+                const zone = zones.find(z => z.id === this.selectedZone);
+                if (zone) {
+                    this.renderSlidersForZone(this.selectedZone, zone);
+                    this.renderAllocations(this.selectedZone);
+                    this.renderBuildings(this.selectedZone);
+                } else {
+                    // Zone not found in orbitalZones yet, try to render with basic zone info
+                    // This can happen if orbitalZones haven't loaded yet
+                    const isDysonZone = this.selectedZone === 'dyson_sphere';
+                    const basicZone = { id: this.selectedZone, is_dyson_zone: isDysonZone, name: this.selectedZone };
+                    this.renderSlidersForZone(this.selectedZone, basicZone);
+                    this.renderAllocations(this.selectedZone);
+                    this.renderBuildings(this.selectedZone);
+                }
+                this.lastRenderedZone = this.selectedZone;
             } else {
-                // Zone not found in orbitalZones yet, try to render with basic zone info
-                // This can happen if orbitalZones haven't loaded yet
-                const isDysonZone = this.selectedZone === 'dyson_sphere';
-                const basicZone = { id: this.selectedZone, is_dyson_zone: isDysonZone, name: this.selectedZone };
-                this.renderSlidersForZone(this.selectedZone, basicZone);
-                this.renderAllocations(this.selectedZone);
-                this.renderBuildings(this.selectedZone);
+                // Zone hasn't changed, just update slider values and allocations
+                // Try multiple ways to get zones
+                let zones = [];
+                if (window.orbitalZoneSelector && window.orbitalZoneSelector.orbitalZones) {
+                    zones = window.orbitalZoneSelector.orbitalZones;
+                } else if (window.app && window.app.orbitalZoneSelector && window.app.orbitalZoneSelector.orbitalZones) {
+                    zones = window.app.orbitalZoneSelector.orbitalZones;
+                }
+                
+                const zone = zones.find(z => z.id === this.selectedZone);
+                if (zone) {
+                    const isDysonZone = zone.is_dyson_zone;
+                    this.syncSlidersWithPolicy(this.selectedZone, isDysonZone);
+                    this.renderAllocations(this.selectedZone);
+                    this.renderBuildings(this.selectedZone);
+                }
             }
         } else {
+            if (this.lastRenderedZone !== null) {
+                // Zone deselected, clear UI
+                this.lastRenderedZone = null;
+            }
             // Clear sliders and allocations
             const sliderContainer = document.getElementById('command-sliders-container');
             if (sliderContainer) {

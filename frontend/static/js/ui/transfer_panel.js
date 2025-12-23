@@ -147,7 +147,7 @@ class TransferPanel {
             const ratePerDay = transfer.rate || 0;
             const ratePct = transfer.ratePercentage !== undefined ? transfer.ratePercentage : (transfer.rate || 0);
             html += `<div class="transfer-item-details">`;
-            html += `<div class="transfer-detail">Rate: ${ratePerDay.toFixed(2)} probes/day (${ratePct.toFixed(1)}% of current drones/day)</div>`;
+            html += `<div class="transfer-detail">Rate: ${ratePerDay.toFixed(2)} probes/day (${ratePct.toFixed(1)}% of current probes/day)</div>`;
             html += `</div>`;
             
             if (transfer.status === 'active') {
@@ -204,7 +204,7 @@ class TransferPanel {
         
         // Show edit dialog
         const currentPct = transfer.ratePercentage !== undefined ? transfer.ratePercentage : (transfer.rate || 0);
-        const newPct = prompt(`Edit transfer rate (% of current drones per day, current: ${currentPct}%):`, currentPct);
+        const newPct = prompt(`Edit transfer rate (% of current probes per day, current: ${currentPct}%):`, currentPct);
         if (newPct !== null) {
             const ratePct = parseFloat(newPct);
             if (!isNaN(ratePct) && ratePct > 0 && ratePct <= 100) {
@@ -289,6 +289,23 @@ class TransferPanel {
     }
 
     update(gameState) {
+        if (!gameState) return;
+        
+        // Change detection: Only update if transfers have changed
+        // Use efficient hash instead of JSON.stringify to avoid memory issues
+        const activeTransfers = gameState.active_transfers || [];
+        let hash = 0;
+        for (const transfer of activeTransfers) {
+            hash = ((hash << 5) - hash) + (transfer.id || 0);
+            hash = ((hash << 5) - hash) + (transfer.count || 0);
+            hash = ((hash << 5) - hash) + (transfer.rate || 0);
+        }
+        const transfersHash = hash.toString();
+        
+        if (transfersHash === this.lastTransfersHash && this.lastTransfersHash !== null) {
+            return; // No changes, skip update
+        }
+        this.lastTransfersHash = transfersHash;
         this.gameState = gameState;
         
         // Sync with game engine transfer history

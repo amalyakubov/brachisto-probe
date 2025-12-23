@@ -41,6 +41,9 @@
         <!-- Right Sidebar with Tabs -->
         <div id="game-sidebar" class="game-sidebar">
             <div class="sidebar-header">
+                <button id="main-menu-btn" class="main-menu-btn" title="Main Menu" style="margin-right: 10px; padding: 5px 10px; background: rgba(74, 158, 255, 0.2); color: #4a9eff; border: 1px solid #4a9eff; border-radius: 3px; cursor: pointer; font-size: 12px;">
+                    Menu
+                </button>
                 <button id="sidebar-toggle" class="sidebar-toggle" title="Toggle Sidebar">
                     <span id="sidebar-toggle-icon">◀</span>
                 </button>
@@ -53,7 +56,14 @@
                     <button class="tab-btn" data-tab="manage">Manage</button>
                     <button class="tab-btn" data-tab="transfers">Transfers</button>
                 </div>
-                <div class="tab-content active" id="tab-build"></div>
+                <div class="tab-content active" id="tab-build">
+                    <div id="build-tab-content-wrapper" class="build-tab-content-wrapper">
+                        <div id="purchase-panel-content"></div>
+                    </div>
+                    <button id="build-tab-toggle" class="build-tab-toggle" title="Show/Hide Build Panel">
+                        <span id="build-tab-toggle-icon">◀</span>
+                    </button>
+                </div>
                 <div class="tab-content" id="tab-research"></div>
                 <div class="tab-content" id="tab-probe"></div>
                 <div class="tab-content" id="tab-manage"></div>
@@ -124,6 +134,24 @@
                 <button id="close-leaderboard">Close</button>
             </div>
         </div>
+        
+        <!-- Game Menu Modal -->
+        <div id="game-menu-modal" class="modal" style="display: flex;">
+            <div class="modal-content" style="max-width: 600px;">
+                <h2 style="text-align: center; margin-bottom: 30px;">Brachisto-Probe</h2>
+                <div id="game-menu-content">
+                    <button id="new-game-btn" class="menu-btn" style="width: 100%; padding: 15px; margin-bottom: 15px; font-size: 18px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        New Game
+                    </button>
+                    <div id="load-game-section" style="margin-top: 20px;">
+                        <h3 style="margin-bottom: 15px; color: #4a9eff;">Load Previous Game</h3>
+                        <div id="saved-games-list" style="max-height: 400px; overflow-y: auto;">
+                            <p style="text-align: center; color: #888; padding: 20px;">Loading saved games...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     
     <!-- Three.js -->
@@ -132,6 +160,8 @@
     <!-- Game Scripts -->
     <script src="/static/js/api.js"></script>
     <script src="/static/js/utils/performance_profiler.js"></script>
+    <script src="/static/js/utils/performance_tests.js"></script>
+    <script src="/static/js/utils/probe_count_cache.js"></script>
     <script src="/static/js/utils/calculation_cache.js"></script>
     <script src="/static/js/utils/format_utils.js"></script>
     <script src="/static/js/game/config.js"></script>

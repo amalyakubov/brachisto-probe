@@ -118,7 +118,8 @@ class MetricsPanel {
         this.gameState = gameState;
 
         // Calculate total probes
-        const totalProbes = Object.values(gameState.probes || {}).reduce((sum, count) => sum + (count || 0), 0);
+        // Single probe type only: directly access 'probe' key
+        const totalProbes = gameState.probes?.['probe'] || 0;
         const totalProbesEl = document.getElementById('metric-total-probes');
         if (totalProbesEl) {
             totalProbesEl.textContent = this.formatNumber(totalProbes);

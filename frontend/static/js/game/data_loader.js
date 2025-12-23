@@ -74,25 +74,10 @@ class GameDataLoader {
 
     async loadResearchTrees() {
         if (!this.researchTrees) {
-            // Load additional research trees
-            const additionalResponse = await fetch('/game_data/additional_research_trees.json');
-            const additionalData = await additionalResponse.json();
-            
-            // Try to load main research trees (may not exist)
-            let mainTrees = {};
-            try {
-                const mainResponse = await fetch('/game_data/research_trees.json');
-                const mainData = await mainResponse.json();
-                mainTrees = mainData.research_trees || {};
-            } catch (e) {
-                // File doesn't exist, that's okay
-            }
-            
-            // Merge trees
-            this.researchTrees = {
-                ...mainTrees,
-                ...additionalData.additional_research_trees
-            };
+            // Load consolidated research trees (all trees are now in one file)
+            const response = await fetch('/game_data/research_trees.json');
+            const data = await response.json();
+            this.researchTrees = data.research_trees || {};
         }
         return this.researchTrees;
     }
@@ -203,6 +188,7 @@ class GameDataLoader {
 
 // Global instance
 const gameDataLoader = new GameDataLoader();
-// Make it available globally for Probe class
-window.gameDataLoader = gameDataLoader;
+// Make it available globally for Probe class (support both window and worker contexts)
+const global = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : globalThis);
+global.gameDataLoader = gameDataLoader;
 

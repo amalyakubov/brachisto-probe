@@ -32,7 +32,6 @@ class GameDataLoader:
         self._orbital_zones = None
         self._buildings = None
         self._research_trees = None
-        self._additional_research_trees = None
         self._zone_metal_limits = None
         
     def load_orbital_mechanics(self):
@@ -115,20 +114,8 @@ class GameDataLoader:
             return [unit for unit in units if unit.get('id') == 'probe']  # Single probe type only
         return []
     
-    def load_additional_research_trees(self):
-        """Load additional research trees."""
-        if self._additional_research_trees is None:
-            file_path = self.data_dir / 'additional_research_trees.json'
-            if file_path.exists():
-                with open(file_path, 'r') as f:
-                    data = json.load(f)
-                    self._additional_research_trees = data.get('additional_research_trees', {})
-            else:
-                self._additional_research_trees = {}
-        return self._additional_research_trees
-    
     def load_research_trees(self):
-        """Load main research trees (if exists)."""
+        """Load consolidated research trees."""
         if self._research_trees is None:
             file_path = self.data_dir / 'research_trees.json'
             if file_path.exists():
@@ -141,16 +128,8 @@ class GameDataLoader:
         return self._research_trees
     
     def get_all_research_trees(self):
-        """Get all research trees (main + additional)."""
-        main_trees = self.load_research_trees()
-        additional_trees = self.load_additional_research_trees()
-        
-        # Merge them
-        all_trees = {}
-        all_trees.update(main_trees)
-        all_trees.update(additional_trees)
-        
-        return all_trees
+        """Get all research trees."""
+        return self.load_research_trees()
     
     def get_research_tree(self, tree_id):
         """Get a specific research tree by ID."""
