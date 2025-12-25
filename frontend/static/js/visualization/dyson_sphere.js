@@ -7,14 +7,14 @@ class DysonSphereVisualization {
         this.scene.add(this.dysonGroup);
         
         // Orbital configuration
-        // 360 polar orbital rings, 1 degree apart (0°, 1°, 2°, ... 359°)
-        this.numOrbitalRings = 720;
-        this.maxParticlesPerRing = 420;
-        this.maxTotalParticles = this.numOrbitalRings * this.maxParticlesPerRing; // 360,000 max
+        // Polar orbital rings, densely packed for a fuller appearance
+        this.numOrbitalRings = 1024;
+        this.maxParticlesPerRing = 512;
+        this.maxTotalParticles = this.numOrbitalRings * this.maxParticlesPerRing; // 524,288 max
         
-        // 10 different orbital altitudes (as multipliers of base radius)
+        // 5 different orbital altitudes (as multipliers of base radius)
         // Pattern: distributed from 0.95x to 1.05x in a wave pattern
-        this.numAltitudes = 10;
+        this.numAltitudes = 5;
         this.altitudeMultipliers = [];
         for (let i = 0; i < this.numAltitudes; i++) {
             // Create a wave pattern: 0.95 to 1.05 with smooth distribution
@@ -88,7 +88,7 @@ class DysonSphereVisualization {
             this.positions[i * 3] = 0;
             this.positions[i * 3 + 1] = 0;
             this.positions[i * 3 + 2] = 0;
-            this.sizes[i] = 0.025;
+            this.sizes[i] = 0.12; // 3x larger dots
         }
         
         this.particleGeometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
@@ -118,8 +118,8 @@ class DysonSphereVisualization {
                         discard;
                     }
                     
-                    // White color
-                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                    // Dark grey color
+                    gl_FragColor = vec4(0.25, 0.25, 0.25, 1.0);
                 }
             `,
             transparent: false,
@@ -142,7 +142,7 @@ class DysonSphereVisualization {
             this.positions2[i * 3] = 0;
             this.positions2[i * 3 + 1] = 0;
             this.positions2[i * 3 + 2] = 0;
-            this.sizes2[i] = 0.025;
+            this.sizes2[i] = 0.12; // 3x larger dots
         }
         
         this.particleGeometry2.setAttribute('position', new THREE.BufferAttribute(this.positions2, 3));
@@ -168,7 +168,7 @@ class DysonSphereVisualization {
             this.positions3[i * 3] = 0;
             this.positions3[i * 3 + 1] = 0;
             this.positions3[i * 3 + 2] = 0;
-            this.sizes3[i] = 0.025;
+            this.sizes3[i] = 0.12; // 3x larger dots
         }
         
         this.particleGeometry3.setAttribute('position', new THREE.BufferAttribute(this.positions3, 3));
@@ -227,60 +227,21 @@ class DysonSphereVisualization {
     }
     
     /**
-     * Calculate visible particle count using sigmoidal interpolation
-     * - 1000 dots at 100,000 kg
-     * - 180,000 dots (50% of rings) at 50% of target mass
-     * - 360,000 dots (all rings full) at target mass
+     * Calculate visible particle count using linear interpolation
+     * Particle count is linearly proportional to completion percentage
+     * - 0% complete → 0 particles
+     * - 100% complete → maxTotalParticles
      */
     calculateVisibleCount(currentMass) {
         if (currentMass <= 0) {
             return 0;
         }
         
-        const minMass = 100000; // 100,000 kg → 1000 dots
-        const minDots = 1000;
-        const maxDots = this.maxTotalParticles; // 360,000 dots (all rings full)
-        const halfRingsDots = 180000; // 50% of rings = 180 rings * 1000 = 180,000 dots
+        // Linear interpolation: particles = (currentMass / targetMass) * maxParticles
+        const completion = Math.min(1.0, currentMass / this.targetMass);
+        const particleCount = Math.floor(completion * this.maxTotalParticles);
         
-        // If below minimum threshold, use linear scaling
-        if (currentMass < minMass) {
-            return Math.floor((currentMass / minMass) * minDots);
-        }
-        
-        // Calculate 50% mass point (where we want 50% of rings full)
-        const halfMass = this.targetMass * 0.5;
-        
-        // Normalize mass to 0-1 range for sigmoid
-        // Map: minMass → 0, targetMass → 1
-        const normalizedMass = (currentMass - minMass) / (this.targetMass - minMass);
-        
-        // Use sigmoid function: f(x) = L / (1 + e^(-k(x - x0)))
-        // We want:
-        // - At normalizedMass = 0: ~minDots (1000)
-        // - At normalizedMass = 0.5 (halfMass): halfRingsDots (360,000)
-        // - At normalizedMass = 1: maxDots (720,000)
-        
-        // Adjust sigmoid to map [0,1] to [minDots, maxDots]
-        // Using a sigmoid centered at 0.5 with appropriate scaling
-        const k = 8.0; // Steepness parameter (higher = steeper curve)
-        const sigmoidValue = 1 / (1 + Math.exp(-k * (normalizedMass - 0.5)));
-        
-        // Map sigmoid output [0,1] to [minDots, maxDots]
-        // But we want it to start closer to minDots and reach halfRingsDots at midpoint
-        let particleCount;
-        if (normalizedMass <= 0.5) {
-            // First half: interpolate from minDots to halfRingsDots
-            const t = normalizedMass * 2; // Scale to 0-1 for first half
-            const sigmoidT = 1 / (1 + Math.exp(-k * (t - 0.5)));
-            particleCount = minDots + (halfRingsDots - minDots) * sigmoidT;
-        } else {
-            // Second half: interpolate from halfRingsDots to maxDots
-            const t = (normalizedMass - 0.5) * 2; // Scale to 0-1 for second half
-            const sigmoidT = 1 / (1 + Math.exp(-k * (t - 0.5)));
-            particleCount = halfRingsDots + (maxDots - halfRingsDots) * sigmoidT;
-        }
-        
-        return Math.min(maxDots, Math.floor(particleCount));
+        return particleCount;
     }
     
     /**
@@ -426,7 +387,7 @@ class DysonSphereVisualization {
                     phi: phi,
                     angle: angle,
                     orbitalSpeed: orbitalSpeed,
-                    size: 0.020 + Math.random() * 0.010,
+                    size: 0.105 + Math.random() * 0.045, // 3x larger dots (was 0.035 + 0.015)
                     altitudeMultiplier: altitudeMultiplier // Store altitude for this ring
                 };
                 

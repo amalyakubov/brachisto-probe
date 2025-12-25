@@ -95,8 +95,10 @@ class App {
                         this.dysonViz = new DysonSphereVisualization(this.sceneManager.getScene(), this.solarSystem);
                     }
                     if (typeof TransferVisualization !== 'undefined') {
-                        // Pass solarSystem reference for orbit scaling (may be null initially)
-                        this.transferViz = new TransferVisualization(this.sceneManager.getScene(), this.solarSystem);
+                        // Pass solarSystem and structuresViz references
+                        this.transferViz = new TransferVisualization(this.sceneManager.getScene(), this.solarSystem, this.structuresViz);
+                        // Set transfer viz reference in scene manager for line toggling
+                        this.sceneManager.setTransferViz(this.transferViz);
                     }
                 }
             } catch (e) {
@@ -137,11 +139,15 @@ class App {
             }
             
             try {
-                const probeTab = sidebar ? sidebar.getTabContainer('probe') : document.getElementById('tab-probe');
-                if (probeTab) {
-                    probeTab.innerHTML = '<div id="probe-panel-content"></div>';
-                    this.probePanel = new ProbePanel('probe-panel-content');
-                    // Expose globally
+                const probesTab = sidebar ? sidebar.getTabContainer('probes') : document.getElementById('right-tab-probes');
+                if (probesTab) {
+                    let probeStatsPanelContent = document.getElementById('probe-stats-panel-content');
+                    if (!probeStatsPanelContent) {
+                        probesTab.innerHTML = '<div id="probe-stats-panel-content"></div>';
+                        probeStatsPanelContent = document.getElementById('probe-stats-panel-content');
+                    }
+                    this.probePanel = new ProbePanel('probe-stats-panel-content');
+                    // Expose globally for onclick handlers
                     window.probePanel = this.probePanel;
                 }
             } catch (e) {
@@ -765,6 +771,10 @@ class App {
         }
         if (this.probePanel) {
             this.probePanel.update(gameState);
+        }
+        // Expose probePanel globally for onclick handlers
+        if (this.probePanel) {
+            window.probePanel = this.probePanel;
         }
         if (this.managePanel) {
             this.managePanel.update(gameState);

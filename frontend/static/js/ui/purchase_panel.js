@@ -948,20 +948,31 @@ class PurchasePanel {
                 this.cachedElements.buildingProgressContainers = Array.from(this.container.querySelectorAll('.building-progress-container'));
                 this.cachedElements.lastCacheTime = Date.now();
             }
+            // Get structure start times for time progress tracking
+            const structureStartTimes = gameState.structure_construction_start_times || {};
+            const currentTime = gameState.time || 0;
+            
+            // Minimum build time for structures (3 days, 1000 for mass_driver)
+            const getMinBuildTime = (buildingId) => buildingId === 'mass_driver' ? 1000 : 3;
+            
             this.cachedElements.buildingProgressContainers.forEach(container => {
                 const buildingId = container.id.replace('progress-', '');
                 const building = this.getBuildingById(buildingId);
                 if (!building) return;
                 
                 const costMetal = this.getBuildingCost(building, buildingId);
-                let progress = 0;
+                let metalProgress = 0;
                 let buildRatePerBuilding = 0;
                 let timeToComplete = Infinity;
+                let timeProgressPercent = 0;
+                let startTime = null;
+                const minBuildTime = getMinBuildTime(buildingId);
                 
                 if (this.selectedZone) {
                     // Show progress for selected zone
                     const enabledKey = `${this.selectedZone}::${buildingId}`;
-                    progress = structureProgress[enabledKey] || 0;
+                    metalProgress = structureProgress[enabledKey] || 0;
+                    startTime = structureStartTimes[enabledKey];
                     
                     // Get zone metal availability for throttling calculation
                     const zones = gameState.zones || {};
@@ -976,7 +987,7 @@ class PurchasePanel {
                         
                         // Account for metal throttling (same as structure system)
                         // If metal is limited, actual progress rate is reduced
-                        const remainingToBuild = costMetal - progress;
+                        const remainingToBuild = costMetal - metalProgress;
                         const metalNeededPerDay = buildRatePerBuilding; // 1:1 ratio
                         if (storedMetal < metalNeededPerDay && metalNeededPerDay > 0) {
                             // Metal throttling: reduce effective rate based on available metal
@@ -985,23 +996,38 @@ class PurchasePanel {
                         }
                     }
                     
-                    // Debug log progress (occasionally)
-                    if (progress > 0 && Math.random() < 0.05) { // 5% chance
-                        console.log(`[PurchasePanel] ${buildingId} in ${this.selectedZone}: progress=${progress.toFixed(2)}/${costMetal.toFixed(2)} kg, rate=${buildRatePerBuilding.toFixed(2)} kg/day, metal=${storedMetal.toFixed(2)} kg`);
+                    // Calculate time progress (elapsed time / minimum build time)
+                    if (startTime !== null && startTime !== undefined) {
+                        const elapsedTime = currentTime - startTime;
+                        timeProgressPercent = Math.min(100, (elapsedTime / minBuildTime) * 100);
                     }
                     
-                    // Calculate time to complete based on effective rate
-                    const remainingToBuild = costMetal - progress;
-                    if (buildRatePerBuilding > 0 && remainingToBuild > 0) {
-                        timeToComplete = remainingToBuild / buildRatePerBuilding; // days
-                    } else if (remainingToBuild <= 0) {
-                        timeToComplete = 0; // Already complete
-                    }
+                    // Calculate time to complete (whichever is greater: remaining metal time or remaining min time)
+                    const remainingToBuild = costMetal - metalProgress;
+                    const metalTimeRemaining = (buildRatePerBuilding > 0 && remainingToBuild > 0) 
+                        ? remainingToBuild / buildRatePerBuilding 
+                        : (remainingToBuild <= 0 ? 0 : Infinity);
+                    const timeRemaining = (startTime !== null && startTime !== undefined)
+                        ? Math.max(0, minBuildTime - (currentTime - startTime))
+                        : minBuildTime;
+                    
+                    // Time to complete is the max of the two (both need to be met)
+                    timeToComplete = Math.max(metalTimeRemaining, timeRemaining);
                 } else {
                     // No zone selected - show total progress across all zones
-                    progress = Object.entries(structureProgress)
+                    metalProgress = Object.entries(structureProgress)
                         .filter(([key]) => key.endsWith(`::${buildingId}`))
                         .reduce((sum, [, val]) => sum + val, 0);
+                    
+                    // Get earliest start time for this building type
+                    const relevantStartTimes = Object.entries(structureStartTimes)
+                        .filter(([key]) => key.endsWith(`::${buildingId}`))
+                        .map(([, time]) => time);
+                    if (relevantStartTimes.length > 0) {
+                        startTime = Math.min(...relevantStartTimes);
+                        const elapsedTime = currentTime - startTime;
+                        timeProgressPercent = Math.min(100, (elapsedTime / minBuildTime) * 100);
+                    }
                     
                     // Calculate total build rate across all zones for this building
                     let totalBuildRate = 0;
@@ -1019,15 +1045,25 @@ class PurchasePanel {
                     buildRatePerBuilding = totalBuildRate;
                     
                     // Calculate time to complete
-                    const remainingToBuild = costMetal - progress;
-                    if (buildRatePerBuilding > 0 && remainingToBuild > 0) {
-                        timeToComplete = remainingToBuild / buildRatePerBuilding; // days
-                    } else if (remainingToBuild <= 0) {
-                        timeToComplete = 0; // Already complete
-                    }
+                    const remainingToBuild = costMetal - metalProgress;
+                    const metalTimeRemaining = (buildRatePerBuilding > 0 && remainingToBuild > 0) 
+                        ? remainingToBuild / buildRatePerBuilding 
+                        : (remainingToBuild <= 0 ? 0 : Infinity);
+                    const timeRemaining = (startTime !== null && startTime !== undefined)
+                        ? Math.max(0, minBuildTime - (currentTime - startTime))
+                        : minBuildTime;
+                    
+                    timeToComplete = Math.max(metalTimeRemaining, timeRemaining);
                 }
                 
-                const progressPercent = costMetal > 0 ? (progress / costMetal) * 100 : 0;
+                // Calculate metal progress percentage
+                const metalProgressPercent = costMetal > 0 ? (metalProgress / costMetal) * 100 : 0;
+                
+                // Overall progress is the minimum of metal progress and time progress
+                // (both need to reach 100% for completion)
+                const overallProgressPercent = (startTime !== null && startTime !== undefined)
+                    ? Math.min(metalProgressPercent, timeProgressPercent)
+                    : metalProgressPercent;
                 
                 const progressPercentEl = document.getElementById(`progress-percent-${buildingId}`);
                 const progressTimeEl = document.getElementById(`progress-time-${buildingId}`);
@@ -1036,16 +1072,25 @@ class PurchasePanel {
                 // Always show the container
                 container.style.display = 'block';
                 
-                // Update progress bar
+                // Update progress bar (show overall progress)
                 if (progressBarEl) {
-                    progressBarEl.style.width = `${Math.min(100, Math.max(0, progressPercent))}%`;
+                    progressBarEl.style.width = `${Math.min(100, Math.max(0, overallProgressPercent))}%`;
                 }
                 
                 if (progressPercentEl) {
-                    progressPercentEl.textContent = `${progressPercent.toFixed(1)}%`;
+                    // Show which constraint is limiting (metal or time)
+                    if (startTime !== null && startTime !== undefined && metalProgressPercent >= 100 && timeProgressPercent < 100) {
+                        // Metal done, waiting for time
+                        progressPercentEl.textContent = `${timeProgressPercent.toFixed(1)}% (time)`;
+                    } else if (startTime !== null && startTime !== undefined && timeProgressPercent >= 100 && metalProgressPercent < 100) {
+                        // Time done, waiting for metal
+                        progressPercentEl.textContent = `${metalProgressPercent.toFixed(1)}% (metal)`;
+                    } else {
+                        progressPercentEl.textContent = `${overallProgressPercent.toFixed(1)}%`;
+                    }
                 }
                 if (progressTimeEl) {
-                    if (timeToComplete === 0) {
+                    if (timeToComplete === 0 || (metalProgressPercent >= 100 && timeProgressPercent >= 100)) {
                         progressTimeEl.textContent = 'Complete';
                     } else if (timeToComplete === Infinity || !isFinite(timeToComplete)) {
                         progressTimeEl.textContent = '—';

@@ -451,15 +451,16 @@ class TechTree {
             tierState.research_start_time = currentTime;
         }
         
-        // Calculate total FLOPS cost for the tier
-        // Cost is specified as EFLOPS-days: 10,000 EFLOPS-days for tier 1
-        // EFLOPS-days to total FLOPS: EFLOPS * 1e18 * 86400 seconds/day
+        // Calculate cost for the tier in FLOP-days (same unit as progress)
+        // Cost is specified as EFLOPS-days: 100 EFLOPS-days for tier 1, doubling each tier
+        // Progress is added as (intelligenceRate * deltaTime) where intelligenceRate is FLOPS, deltaTime is days
+        // So both cost and progress are in FLOP-days units
         const EFLOPS_TO_FLOPS = 1e18;
-        const SECONDS_PER_DAY = 86400;
+        const SECONDS_PER_DAY = 86400; // Used for legacy tranche_cost_intelligence conversion
         
-        // Get tier cost in EFLOPS-days (default: 10,000 for tier 1)
+        // Get tier cost in EFLOPS-days (default: 100 for tier 1, 2x scaling)
         // If tranche_cost_intelligence exists, convert it (it's per-tranche, so multiply by tranches)
-        // Otherwise use tier_cost_eflops_days if specified, or default to 10,000 for tier 1
+        // Otherwise use tier_cost_eflops_days if specified, or default to 100 for tier 1
         let tierCostEFLOPSDays;
         if (tierDef.tier_cost_eflops_days !== undefined) {
             tierCostEFLOPSDays = tierDef.tier_cost_eflops_days;
@@ -469,15 +470,15 @@ class TechTree {
             // But if it's clearly per-tranche (very small), multiply by tranches
             const legacyCost = tierDef.tranche_cost_intelligence;
             const legacyCostEFLOPSDays = legacyCost / (EFLOPS_TO_FLOPS * SECONDS_PER_DAY);
-            // If it's less than 1000 EFLOPS-days, it's probably per-tranche
-            if (legacyCostEFLOPSDays < 1000) {
+            // If it's less than 50 EFLOPS-days, it's probably per-tranche
+            if (legacyCostEFLOPSDays < 50) {
                 tierCostEFLOPSDays = legacyCostEFLOPSDays * totalTranches;
             } else {
                 tierCostEFLOPSDays = legacyCostEFLOPSDays;
             }
         } else {
-            // Default: tier 1 costs 10,000 EFLOPS-days
-            // Higher tiers scale exponentially (each tier costs ~10x more)
+            // Default: tier 1 costs 100 EFLOPS-days
+            // Higher tiers scale exponentially (each tier costs 2x more)
             // Find tier index to determine scaling
             let tierIndex = 0;
             if (tree && tree.tiers) {
@@ -485,13 +486,29 @@ class TechTree {
                 if (foundIndex >= 0) {
                     tierIndex = foundIndex;
                 }
+            } else if (tree && tree.subcategories && tierId.includes('_')) {
+                // Handle subcategory tiers (format: "subcatId_tierId")
+                const parts = tierId.split('_');
+                if (parts.length >= 2) {
+                    const subcatId = parts[0];
+                    const actualTierId = parts.slice(1).join('_');
+                    const subcatData = tree.subcategories[subcatId];
+                    if (subcatData && subcatData.tiers) {
+                        const foundIndex = subcatData.tiers.findIndex(t => t.id === actualTierId);
+                        if (foundIndex >= 0) {
+                            tierIndex = foundIndex;
+                        }
+                    }
+                }
             }
-            const baseCostEFLOPSDays = 10000; // Tier 1 base cost
-            tierCostEFLOPSDays = baseCostEFLOPSDays * Math.pow(10, tierIndex);
+            const baseCostEFLOPSDays = 100; // Tier 1 base cost: 100 EFLOPS-days
+            tierCostEFLOPSDays = baseCostEFLOPSDays * Math.pow(2, tierIndex); // 2x scaling per tier
         }
         
-        // Convert to total FLOPS cost
-        const totalFlopsCost = tierCostEFLOPSDays * EFLOPS_TO_FLOPS * SECONDS_PER_DAY;
+        // Convert to FLOP-days cost (same units as progress: FLOPS * days)
+        // Progress is added as (intelligenceRate * deltaTime) where intelligenceRate is FLOPS and deltaTime is days
+        // So cost should be in FLOP-days, not total FLOP operations
+        const totalFlopsCost = tierCostEFLOPSDays * EFLOPS_TO_FLOPS;
         
         // FLOPS per tranche (for display purposes - divide total cost evenly across tranches)
         const flopsPerTranche = totalFlopsCost / totalTranches;
@@ -548,7 +565,30 @@ class TechTree {
      */
     autoEnableNextTier(treeId, completedTierId) {
         const tree = this.treeLookup[treeId];
-        if (!tree || !tree.tiers) return;
+        if (!tree) return;
+        
+        // Check if this is a subcategory tier (format: "subcatId_tierId")
+        if (completedTierId.includes('_') && tree.subcategories) {
+            const parts = completedTierId.split('_');
+            if (parts.length >= 2) {
+                const subcatId = parts[0];
+                const actualTierId = parts.slice(1).join('_');
+                const subcatData = tree.subcategories[subcatId];
+                
+                if (subcatData && subcatData.tiers) {
+                    const currentIndex = subcatData.tiers.findIndex(t => t.id === actualTierId);
+                    if (currentIndex >= 0 && currentIndex < subcatData.tiers.length - 1) {
+                        const nextTier = subcatData.tiers[currentIndex + 1];
+                        const nextTierKey = subcatId + '_' + nextTier.id;
+                        this.enableTier(treeId, nextTierKey);
+                    }
+                    return;
+                }
+            }
+        }
+        
+        // Regular tree with direct tiers
+        if (!tree.tiers) return;
         
         const currentIndex = tree.tiers.findIndex(t => t.id === completedTierId);
         if (currentIndex >= 0 && currentIndex < tree.tiers.length - 1) {
@@ -602,7 +642,27 @@ class TechTree {
             for (const [tierId, tierState] of Object.entries(treeState)) {
                 if (!tierState.enabled || tierState.completed) continue;
                 
-                const tierDef = tree.tiers?.find(t => t.id === tierId);
+                let tierDef = null;
+                
+                // Check if this is a subcategory tier (format: "subcatId_tierId")
+                if (tierId.includes('_') && tree.subcategories) {
+                    const parts = tierId.split('_');
+                    if (parts.length >= 2) {
+                        const subcatId = parts[0];
+                        const actualTierId = parts.slice(1).join('_');
+                        const subcatData = tree.subcategories[subcatId];
+                        
+                        if (subcatData && subcatData.tiers) {
+                            tierDef = subcatData.tiers.find(t => t.id === actualTierId);
+                        }
+                    }
+                }
+                
+                // If not found in subcategories, check regular tiers
+                if (!tierDef && tree.tiers) {
+                    tierDef = tree.tiers.find(t => t.id === tierId);
+                }
+                
                 if (tierDef) {
                     projects.push({ treeId, tierId, tierState, tierDef });
                 }
@@ -647,8 +707,92 @@ class TechTree {
             this.researchState = JSON.parse(JSON.stringify(state.research));
         }
         
+        // Ensure first incomplete tier is enabled for each tree (for continuous research)
+        this.ensureFirstIncompleteTiersEnabled();
+        
         this.updateSkillsCache();
         this.updateCategoryFactors();
+    }
+    
+    /**
+     * Ensure the first incomplete tier in each tree is enabled
+     * This allows research to continue automatically after tier completion
+     */
+    ensureFirstIncompleteTiersEnabled() {
+        for (const [treeId, tree] of Object.entries(this.treeLookup)) {
+            // Handle trees with subcategories (like computer_systems)
+            if (tree.subcategories) {
+                for (const [subcatId, subcatData] of Object.entries(tree.subcategories)) {
+                    if (!subcatData.tiers) continue;
+                    
+                    this.ensureFirstIncompleteTierEnabled(treeId, subcatData.tiers, subcatId);
+                }
+            }
+            // Handle regular trees
+            else if (tree.tiers) {
+                this.ensureFirstIncompleteTierEnabled(treeId, tree.tiers);
+            }
+        }
+    }
+    
+    /**
+     * Ensure the first incomplete tier in a tier list is enabled
+     * @param {string} treeId - Tree ID
+     * @param {Array} tiers - Array of tier definitions
+     * @param {string} subcatId - Subcategory ID (optional, for subcategory tiers)
+     */
+    ensureFirstIncompleteTierEnabled(treeId, tiers, subcatId = null) {
+        if (!this.researchState[treeId]) {
+            this.researchState[treeId] = {};
+        }
+        
+        for (let i = 0; i < tiers.length; i++) {
+            const tier = tiers[i];
+            const tierKey = subcatId ? `${subcatId}_${tier.id}` : tier.id;
+            const tierState = this.researchState[treeId][tierKey];
+            
+            // Initialize tier state if not exists
+            if (!tierState) {
+                this.researchState[treeId][tierKey] = {
+                    tranches_completed: 0,
+                    progress: 0,
+                    enabled: i === 0, // Only enable first tier by default
+                    completed: false,
+                    research_start_time: null,
+                    completion_time: null
+                };
+                continue;
+            }
+            
+            const totalTranches = tier.tranches || this.TRANCHES_PER_TIER;
+            const isComplete = (tierState.tranches_completed || 0) >= totalTranches;
+            
+            // Mark as completed if fully tranched
+            if (isComplete && !tierState.completed) {
+                tierState.completed = true;
+            }
+            
+            // If this tier is incomplete, check if it should be enabled
+            if (!isComplete) {
+                // Check if previous tier is complete (or this is the first tier)
+                let prevTierComplete = true;
+                if (i > 0) {
+                    const prevTier = tiers[i - 1];
+                    const prevTierKey = subcatId ? `${subcatId}_${prevTier.id}` : prevTier.id;
+                    const prevTierState = this.researchState[treeId][prevTierKey];
+                    const prevTotalTranches = prevTier.tranches || this.TRANCHES_PER_TIER;
+                    prevTierComplete = (prevTierState?.tranches_completed || 0) >= prevTotalTranches;
+                }
+                
+                // If previous tier is complete and this tier is not enabled, enable it
+                if (prevTierComplete && !tierState.enabled) {
+                    tierState.enabled = true;
+                }
+                
+                // Found the first incomplete tier - stop checking this tree
+                break;
+            }
+        }
     }
     
     /**

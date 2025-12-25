@@ -8,12 +8,105 @@
 class TransferSystem {
     constructor(orbitalMechanics) {
         this.orbitalMechanics = orbitalMechanics;
+        this.economicRules = null;
         // Track accumulated probes for continuous transfers (per transfer)
         this.continuousAccumulators = new Map();
         // Track last rate update time (for 5-second updates)
         this.lastRateUpdateTime = 0;
         // Track mass driver usage: {zoneId: {driver_index: {transfer_id, last_one_time_time, type}}}
         this.massDriverUsage = new Map();
+    }
+    
+    /**
+     * Initialize with economic rules (for skill coefficients)
+     * @param {Object} economicRules - Economic rules from data loader
+     */
+    initializeEconomicRules(economicRules) {
+        this.economicRules = economicRules;
+    }
+    
+    /**
+     * Build skill values array from coefficients and skills
+     * @param {Object} coefficients - Skill coefficients { skillName: coefficient }
+     * @param {Object} skills - Current skills from research
+     * @returns {Array<number>} Array of (coefficient * skill) values
+     */
+    buildSkillValues(coefficients, skills) {
+        if (!coefficients) return [1.0];
+        
+        const values = [];
+        for (const [skillName, coefficient] of Object.entries(coefficients)) {
+            if (skillName === 'description') continue; // Skip description field
+            
+            // Map skill names to actual skill values
+            let skillValue = 1.0;
+            switch (skillName) {
+                case 'robotic':
+                    skillValue = skills.robotic || skills.manipulation || 1.0;
+                    break;
+                case 'computer':
+                    skillValue = skills.computer?.total || 1.0;
+                    break;
+                case 'solar_pv':
+                    skillValue = skills.solar_pv || skills.energy_collection || 1.0;
+                    break;
+                default:
+                    skillValue = skills[skillName] || 1.0;
+            }
+            
+            values.push(coefficient * skillValue);
+        }
+        
+        return values.length > 0 ? values : [1.0];
+    }
+    
+    /**
+     * Calculate tech tree upgrade factor using geometric mean
+     * Formula: F = G^alpha where G = (c1*s1 * c2*s2 * ... * cn*sn)^(1/n)
+     * @param {Array<number>} skillValues - Array of (skill * coefficient) values
+     * @param {number} alpha - Tech growth scale factor (default 0.75)
+     * @returns {number} Tech tree upgrade factor
+     */
+    calculateTechTreeUpgradeFactor(skillValues, alpha = 0.75) {
+        if (!skillValues || skillValues.length === 0) return 1.0;
+        
+        // Filter out zero/negative values (safety check)
+        const validValues = skillValues.filter(v => v > 0);
+        if (validValues.length === 0) return 1.0;
+        
+        // Calculate geometric mean: G = (v1 * v2 * ... * vn)^(1/n)
+        const product = validValues.reduce((prod, val) => prod * val, 1.0);
+        const geometricMean = Math.pow(product, 1.0 / validValues.length);
+        
+        // Calculate log(G)
+        const logG = Math.log(geometricMean);
+        
+        // F = exp(alpha * log(G)) = G^alpha
+        const factor = Math.exp(alpha * logG);
+        
+        return factor;
+    }
+    
+    /**
+     * Calculate upgrade factor from skill coefficients
+     * @param {string} category - Category name (e.g., 'mass_driver_capacity')
+     * @param {Object} skills - Current skills
+     * @param {number} alpha - Alpha factor (default from config)
+     * @returns {number} Upgrade factor
+     */
+    calculateUpgradeFactorFromCoefficients(category, skills, alpha = null) {
+        if (!this.economicRules || !this.economicRules.skill_coefficients) {
+            return 1.0;
+        }
+        
+        const coefficients = this.economicRules.skill_coefficients[category];
+        if (!coefficients) {
+            return 1.0;
+        }
+        
+        const skillValues = this.buildSkillValues(coefficients, skills);
+        const alphaFactor = alpha !== null ? alpha : (this.economicRules.alpha_factors?.structure_performance || 0.8);
+        return this.calculateTechTreeUpgradeFactor(skillValues, alphaFactor);
     }
     
     /**
@@ -81,16 +174,15 @@ class TransferSystem {
         const fromZoneId = transfer.from_zone;
         const transferResourceType = transfer.resource_type || 'probe'; // 'probe' or 'metal'
         
-        // Get current propulsion skill for transfer time calculation
+        // Get current skills for transfer time calculation
         const skills = state.skills || {};
-        const propulsionSkill = skills.propulsion || 1.0;
         
-        // Recalculate transfer time with current propulsion skill (for continuous transfers)
-        // This allows transfers to benefit from propulsion skill improvements during transit
+        // Recalculate transfer time with current skills (for continuous transfers)
+        // This allows transfers to benefit from skill improvements during transit
         let baseTransferTime = this.orbitalMechanics.calculateTransferTime(
             transfer.from_zone,
             transfer.to_zone,
-            propulsionSkill
+            skills
         );
         
         // Apply mass driver speed multiplier for probe and metal transfers leaving this zone
@@ -99,8 +191,15 @@ class TransferSystem {
         const massDriverCount = zoneStructures['mass_driver'] || 0;
         
         if (massDriverCount > 0) {
-            const speedMultiplier = this.calculateMassDriverSpeedMultiplier(massDriverCount);
+            const speedMultiplier = this.calculateMassDriverSpeedMultiplier(massDriverCount, state);
             baseTransferTime = baseTransferTime * speedMultiplier;
+        }
+        
+        // Slow down metal transfers to Dyson sphere for visual effect
+        const toZoneId = transfer.to_zone;
+        const isDysonDestination = toZoneId === 'dyson_sphere' || toZoneId === 'dyson';
+        if (isDysonDestination && transferResourceType === 'metal') {
+            baseTransferTime = baseTransferTime * 3.0;
         }
         
         transfer.transfer_time = baseTransferTime;
@@ -191,18 +290,28 @@ class TransferSystem {
             
             state.probes_by_zone = probesByZone;
         } else if (transferResourceType === 'metal') {
-            // Metal transfer - use metal_rate_kg_per_day (set directly, not percentage)
-            const metalRateKgPerDay = transfer.metal_rate_kg_per_day || 0;
+            // Metal transfer - use metal_rate_percentage (% of stored metal per day)
+            const metalRatePercentage = transfer.metal_rate_percentage || 0;
             
-            if (metalRateKgPerDay <= 0) return;
+            if (metalRatePercentage <= 0) return;
             
             // Get available metal in source zone
             const zones = state.zones || {};
             const sourceZone = zones[fromZoneId] || {};
             available = sourceZone.stored_metal || 0;
             
-            // Send rate is the metal rate (kg/day)
-            sendRate = metalRateKgPerDay;
+            // Calculate actual kg/day based on percentage of stored metal
+            const metalRateKgPerDay = available * (metalRatePercentage / 100);
+            
+            if (metalRateKgPerDay <= 0) return;
+            
+            // Calculate total capacity and check if this transfer's rate exceeds its share
+            const totalCapacity = this.calculateMetalTransferCapacity(state, fromZoneId);
+            const usedByOthers = this.calculateUsedMetalCapacity(state, fromZoneId, transfer.id);
+            const availableCapacity = Math.max(0, totalCapacity - usedByOthers);
+            
+            // Cap send rate at available capacity
+            sendRate = Math.min(metalRateKgPerDay, availableCapacity);
             
             // Get accumulator for this transfer
             const transferId = transfer.id;
@@ -474,32 +583,28 @@ class TransferSystem {
     
     /**
      * Calculate transfer speed multiplier based on mass driver presence
-     * Having any mass drivers reduces travel time by 90% for outgoing transfers
+     * Mass drivers halve travel time for outgoing transfers (50% reduction)
      * @param {number} massDriverCount - Number of mass drivers in zone
+     * @param {Object} state - Optional game state (reserved for future upgrades)
      * @returns {number} Speed multiplier (multiplies transfer time, so lower = faster)
      */
-    calculateMassDriverSpeedMultiplier(massDriverCount) {
+    calculateMassDriverSpeedMultiplier(massDriverCount, state = null) {
         if (massDriverCount === 0) {
             return 1.0; // No speed boost without mass drivers
         }
         
-        // Exponential decay: approaches 0.1 (10% of original time) as count increases
-        // k = 0.3 gives good decay curve (1 driver = ~0.77, 5 drivers = ~0.22, 10 drivers = ~0.13)
-        const k = 0.3;
-        const minMultiplier = 0.05; // 10% of original time
-        const maxMultiplier = 1.0; // 100% of original time (no boost)
-        
-        const multiplier = minMultiplier + (maxMultiplier - minMultiplier) * Math.exp(-k * massDriverCount);
-        return multiplier;
+        // Mass drivers halve travel time (50% of original)
+        return 0.5;
     }
     
     /**
      * Calculate metal transfer capacity based on mass driver count and upgrades
      * @param {Object} state - Game state
      * @param {string} zoneId - Zone identifier
+     * @param {Object} buildingsData - Optional buildings data (loaded from buildings.json)
      * @returns {number} Metal transfer capacity in kg/day
      */
-    calculateMetalTransferCapacity(state, zoneId) {
+    calculateMetalTransferCapacity(state, zoneId, buildingsData = null) {
         const structuresByZone = state.structures_by_zone || {};
         const zoneStructures = structuresByZone[zoneId] || {};
         const massDriverCount = zoneStructures['mass_driver'] || 0;
@@ -508,28 +613,77 @@ class TransferSystem {
             return 0; // No metal transfer without mass drivers
         }
         
-        // Base capacity: 100 gigatons per day = 100e12 kg/day per driver
-        const BASE_CAPACITY_PER_DRIVER = 100e12; // 100 GT/day per driver
+        // Get base capacity from buildings data, or use default (100 GT/day per driver)
+        let baseCapacityPerDriver = 100e12; // Default: 100 GT/day
+        if (buildingsData && buildingsData.mass_driver) {
+            baseCapacityPerDriver = buildingsData.mass_driver.metal_launch_capacity_kg_per_day || baseCapacityPerDriver;
+        }
         
         // Capacity increases linearly with number of drivers
-        let totalCapacity = BASE_CAPACITY_PER_DRIVER * massDriverCount;
+        let totalCapacity = baseCapacityPerDriver * massDriverCount;
         
         // Apply upgrade factors (transport research improves capacity)
         const upgradeFactors = state.upgrade_factors || {};
         const transportUpgrade = upgradeFactors.structure?.building?.performance || 1.0;
         
-        // Also check for transport-specific skills
+        // Use config-driven skill coefficients for mass driver capacity
         const skills = state.skills || {};
-        const transportSkill = skills.energy_transport || 1.0;
-        const strengthSkill = skills.strength || 1.0;
-        const locomotionSkill = skills.locomotion || 1.0;
+        const capacityUpgradeFactor = this.calculateUpgradeFactorFromCoefficients('mass_driver_capacity', skills);
         
-        // Capacity improves with transport, strength, and locomotion skills
-        const skillMultiplier = transportSkill * Math.sqrt(strengthSkill) * Math.sqrt(locomotionSkill);
-        
-        totalCapacity = totalCapacity * transportUpgrade * skillMultiplier;
+        totalCapacity = totalCapacity * transportUpgrade * capacityUpgradeFactor;
         
         return totalCapacity;
+    }
+    
+    /**
+     * Calculate total metal rate currently being used by all transfers from a zone
+     * @param {Object} state - Game state
+     * @param {string} zoneId - Zone identifier
+     * @param {string} excludeTransferId - Optional transfer ID to exclude from calculation
+     * @returns {number} Total metal rate in kg/day
+     */
+    calculateUsedMetalCapacity(state, zoneId, excludeTransferId = null) {
+        const activeTransfers = state.active_transfers || [];
+        let totalRate = 0;
+        
+        // Get stored metal for this zone to calculate rates from percentages
+        const zones = state.zones || {};
+        const sourceZone = zones[zoneId] || {};
+        const storedMetal = sourceZone.stored_metal || 0;
+        
+        for (const transfer of activeTransfers) {
+            // Skip if this transfer should be excluded
+            if (excludeTransferId && transfer.id === excludeTransferId) continue;
+            
+            // Only count metal transfers from this zone
+            if (transfer.from_zone !== zoneId) continue;
+            if (transfer.resource_type !== 'metal') continue;
+            if (transfer.paused) continue;
+            
+            if (transfer.type === 'continuous') {
+                // Calculate actual rate from percentage of stored metal
+                const ratePercentage = transfer.metal_rate_percentage || 0;
+                const actualRateKgPerDay = storedMetal * (ratePercentage / 100);
+                totalRate += actualRateKgPerDay;
+            }
+            // One-time transfers don't consume ongoing capacity
+        }
+        
+        return totalRate;
+    }
+    
+    /**
+     * Get available metal transfer capacity for a zone
+     * @param {Object} state - Game state
+     * @param {string} zoneId - Zone identifier
+     * @param {Object} buildingsData - Optional buildings data
+     * @param {string} excludeTransferId - Optional transfer ID to exclude
+     * @returns {number} Available capacity in kg/day
+     */
+    getAvailableMetalCapacity(state, zoneId, buildingsData = null, excludeTransferId = null) {
+        const totalCapacity = this.calculateMetalTransferCapacity(state, zoneId, buildingsData);
+        const usedCapacity = this.calculateUsedMetalCapacity(state, zoneId, excludeTransferId);
+        return Math.max(0, totalCapacity - usedCapacity);
     }
     
     /**
@@ -608,14 +762,27 @@ class TransferSystem {
             if (!this.hasMassDriver(state, fromZoneId)) {
                 return { success: false, transfer: null, error: 'Mass driver required for metal transfers' };
             }
+            
+            // Check capacity for continuous metal transfers
+            if (type === 'continuous' && ratePercentage > 0) {
+                const availableCapacity = this.getAvailableMetalCapacity(state, fromZoneId);
+                if (availableCapacity <= 0) {
+                    return { success: false, transfer: null, error: 'No mass driver capacity available. Build more mass drivers or reduce other transfer rates.' };
+                }
+                // Cap the rate at available capacity
+                if (ratePercentage > availableCapacity) {
+                    console.log(`[Transfer] Metal rate capped from ${ratePercentage} to ${availableCapacity} kg/day (capacity limit)`);
+                    ratePercentage = availableCapacity;
+                }
+            }
         }
         
-        // Get current propulsion skill (use current state skills if not provided)
-        const propulsionSkill = (skills && skills.propulsion) ? skills.propulsion : (state.skills?.propulsion || 1.0);
+        // Get current skills (use provided skills or state skills)
+        const currentSkills = (skills && typeof skills === 'object') ? skills : (state.skills || {});
         
-        // Calculate delta-v and base transfer time using current propulsion skill
-        const deltaV = this.orbitalMechanics.calculateDeltaV(fromZoneId, toZoneId, propulsionSkill);
-        let transferTime = this.orbitalMechanics.calculateTransferTime(fromZoneId, toZoneId, propulsionSkill);
+        // Calculate delta-v and base transfer time using current skills
+        const deltaV = this.orbitalMechanics.calculateDeltaV(fromZoneId, toZoneId, currentSkills);
+        let transferTime = this.orbitalMechanics.calculateTransferTime(fromZoneId, toZoneId, currentSkills);
         
         // Validate transfer time
         if (!transferTime || !isFinite(transferTime) || transferTime <= 0) {
@@ -629,7 +796,7 @@ class TransferSystem {
         const massDriverCount = zoneStructures['mass_driver'] || 0;
         
         if (massDriverCount > 0) {
-            const speedMultiplier = this.calculateMassDriverSpeedMultiplier(massDriverCount);
+            const speedMultiplier = this.calculateMassDriverSpeedMultiplier(massDriverCount, state);
             transferTime = transferTime * speedMultiplier;
             
             // Validate after multiplier
@@ -639,6 +806,12 @@ class TransferSystem {
             }
         }
         
+        // Slow down metal transfers to Dyson sphere for visual effect
+        // Metal takes 3x longer to reach the Dyson sphere
+        const isDysonDestination = toZoneId === 'dyson_sphere' || toZoneId === 'dyson';
+        if (isDysonDestination && resourceType === 'metal') {
+            transferTime = transferTime * 3.0;
+        }
         
         const transfer = {
             id: this.generateTransferId(),
@@ -674,8 +847,8 @@ class TransferSystem {
         } else {
             // Continuous transfer
             if (resourceType === 'metal') {
-                // For metal, ratePercentage is kg/day
-                transfer.metal_rate_kg_per_day = ratePercentage;
+                // For metal, ratePercentage is percentage of stored metal per day
+                transfer.metal_rate_percentage = ratePercentage;
             } else {
                 // For probes, ratePercentage is percentage of production rate
                 transfer.rate_percentage = ratePercentage;

@@ -9,10 +9,16 @@ class SceneManager {
         this.animationId = null;
         this.keys = {};
         this.solarSystem = null; // Reference to solar system for comet tracking
+        this.transferViz = null; // Reference to transfer visualization for line toggling
         this.currentCometIndex = -1; // -1 means not tracking any comet
+        this.currentTransferIndex = -1; // -1 means not tracking any transfer
         this.cometKeyPressed = false; // Track if 'c' key was just pressed (to avoid rapid cycling)
-        this.arrowLeftPressed = false; // Track arrow key state for comet navigation
-        this.arrowRightPressed = false; // Track arrow key state for comet navigation
+        this.transferKeyPressed = false; // Track if 't' key was just pressed (to avoid rapid cycling)
+        this.arrowLeftPressed = false; // Track arrow key state for comet/transfer navigation
+        this.arrowRightPressed = false; // Track arrow key state for comet/transfer navigation
+        this.tabKeyPressed = false; // Track if Tab key was just pressed (to avoid rapid toggling)
+        this.orbitalLinesVisible = true; // Current visibility state of orbital lines
+        this.trackingMode = null; // 'comet', 'transfer', or null
         
         // Post-processing
         this.composer = null;
@@ -116,6 +122,11 @@ class SceneManager {
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
                 e.preventDefault();
             }
+            
+            // Prevent Tab key default behavior (focus switching) when in game
+            if (e.key === 'Tab') {
+                e.preventDefault();
+            }
         });
 
         document.addEventListener('keyup', (e) => {
@@ -210,24 +221,32 @@ class SceneManager {
         // Update camera controller
         const deltaTime = 0.016; // ~60fps
 
-        // Handle arrow key rotation (or comet navigation when tracking comets)
+        // Handle arrow key rotation (or comet/transfer navigation when tracking)
         if (this.keys['ArrowLeft']) {
-            if (this.currentCometIndex >= 0 && !this.arrowLeftPressed) {
+            if (this.trackingMode === 'comet' && !this.arrowLeftPressed) {
                 // Navigate to previous comet
                 this.arrowLeftPressed = true;
                 this.cycleToPreviousComet();
-            } else if (this.currentCometIndex < 0) {
+            } else if (this.trackingMode === 'transfer' && !this.arrowLeftPressed) {
+                // Navigate to previous transfer
+                this.arrowLeftPressed = true;
+                this.cycleToPreviousTransfer();
+            } else if (!this.trackingMode) {
                 this.cameraController.rotate(-1 * deltaTime * 60, 0);
             }
         } else {
             this.arrowLeftPressed = false;
         }
         if (this.keys['ArrowRight']) {
-            if (this.currentCometIndex >= 0 && !this.arrowRightPressed) {
+            if (this.trackingMode === 'comet' && !this.arrowRightPressed) {
                 // Navigate to next comet
                 this.arrowRightPressed = true;
                 this.cycleToNextComet();
-            } else if (this.currentCometIndex < 0) {
+            } else if (this.trackingMode === 'transfer' && !this.arrowRightPressed) {
+                // Navigate to next transfer
+                this.arrowRightPressed = true;
+                this.cycleToNextTransfer();
+            } else if (!this.trackingMode) {
                 this.cameraController.rotate(1 * deltaTime * 60, 0);
             }
         } else {
@@ -254,15 +273,40 @@ class SceneManager {
             this.cameraController.pan(0, -1, deltaTime);
         }
         
-        // Handle 'c' key to start tracking comets (only if not already tracking)
+        // Handle 'c' key to start tracking comets (only if not already tracking comets)
         if ((this.keys['c'] || this.keys['C']) && !this.cometKeyPressed) {
             this.cometKeyPressed = true;
             // Only start tracking if not already tracking a comet
-            if (this.currentCometIndex < 0) {
+            if (this.trackingMode !== 'comet') {
                 this.startCometTracking();
             }
         } else if (!this.keys['c'] && !this.keys['C']) {
             this.cometKeyPressed = false;
+        }
+        
+        // Handle 't' key to start tracking transfers (only if not already tracking transfers)
+        if ((this.keys['t'] || this.keys['T']) && !this.transferKeyPressed) {
+            this.transferKeyPressed = true;
+            // Only start tracking if not already tracking a transfer
+            if (this.trackingMode !== 'transfer') {
+                this.startTransferTracking();
+            }
+        } else if (!this.keys['t'] && !this.keys['T']) {
+            this.transferKeyPressed = false;
+        }
+        
+        // Handle Tab key to toggle orbital lines visibility
+        if (this.keys['Tab'] && !this.tabKeyPressed) {
+            this.tabKeyPressed = true;
+            this.toggleOrbitalLines();
+        } else if (!this.keys['Tab']) {
+            this.tabKeyPressed = false;
+        }
+        
+        // Handle Escape key to stop tracking
+        if (this.keys['Escape'] && this.trackingMode) {
+            this.stopTracking();
+            console.log('Stopped tracking');
         }
 
         this.cameraController.update(deltaTime);
@@ -305,6 +349,7 @@ class SceneManager {
             bloomParams.radius,
             bloomParams.threshold
         );
+        this.bloomPass.enabled = false;  // Disabled by default
         this.composer.addPass(this.bloomPass);
         
         // God rays pass (custom volumetric light scattering)
@@ -315,6 +360,7 @@ class SceneManager {
         this.godRaysPass.uniforms.density.value = 0.8;
         this.godRaysPass.uniforms.weight.value = 0.4;
         this.godRaysPass.uniforms.samples.value = 50;
+        this.godRaysPass.enabled = false;  // Disabled by default
         this.composer.addPass(this.godRaysPass);
     }
 
@@ -422,6 +468,8 @@ class SceneManager {
             this.cameraController.stopTracking();
         }
         this.currentCometIndex = -1;
+        this.currentTransferIndex = -1;
+        this.trackingMode = null;
     }
     
     /**
@@ -432,6 +480,34 @@ class SceneManager {
     }
     
     /**
+     * Set reference to transfer visualization for line toggling
+     */
+    setTransferViz(transferViz) {
+        this.transferViz = transferViz;
+    }
+    
+    /**
+     * Toggle visibility of all orbital lines, trajectories, and other non-physical visual elements
+     * Includes: planet orbits, comet orbits, transfer arcs
+     */
+    toggleOrbitalLines() {
+        // Toggle the visibility state
+        this.orbitalLinesVisible = !this.orbitalLinesVisible;
+        
+        // Toggle solar system orbital lines (planet orbits, comet orbits)
+        if (this.solarSystem && this.solarSystem.toggleOrbitalLines) {
+            this.solarSystem.toggleOrbitalLines(this.orbitalLinesVisible);
+        }
+        
+        // Toggle transfer visualization lines
+        if (this.transferViz && this.transferViz.toggleTransferLines) {
+            this.transferViz.toggleTransferLines(this.orbitalLinesVisible);
+        }
+        
+        console.log(`Orbital lines ${this.orbitalLinesVisible ? 'shown' : 'hidden'}`);
+    }
+    
+    /**
      * Start tracking the first comet (called when 'c' is pressed and not already tracking)
      */
     startCometTracking() {
@@ -439,8 +515,12 @@ class SceneManager {
             return;
         }
         
+        // Reset transfer tracking if active
+        this.currentTransferIndex = -1;
+        
         // Start at first comet
         this.currentCometIndex = 0;
+        this.trackingMode = 'comet';
         
         const comet = this.solarSystem.comets[this.currentCometIndex];
         
@@ -512,6 +592,165 @@ class SceneManager {
                 return null;
             });
         }
+    }
+    
+    /**
+     * Get list of active transfers from transferViz
+     * Returns array of transfer visualization objects that have active dots
+     */
+    getActiveTransfers() {
+        if (!this.transferViz) {
+            return [];
+        }
+        
+        const activeTransfers = [];
+        
+        // Get one-time transfers
+        if (this.transferViz.transfers) {
+            for (const [transferId, transferViz] of this.transferViz.transfers.entries()) {
+                if (transferViz.dot) {
+                    activeTransfers.push({
+                        id: transferId,
+                        type: 'one-time',
+                        viz: transferViz
+                    });
+                }
+            }
+        }
+        
+        // Get continuous transfer batches
+        if (this.transferViz.continuousBatches) {
+            for (const [batchId, batchViz] of this.transferViz.continuousBatches.entries()) {
+                if (batchViz.dot) {
+                    activeTransfers.push({
+                        id: batchId,
+                        type: 'continuous',
+                        viz: batchViz
+                    });
+                }
+            }
+        }
+        
+        return activeTransfers;
+    }
+    
+    /**
+     * Get the position of a transfer's cargo dot
+     * @param {Object} transferData - Transfer data from getActiveTransfers()
+     * @returns {THREE.Vector3|null} Position of the cargo dot
+     */
+    getTransferDotPosition(transferData) {
+        const viz = transferData.viz;
+        if (!viz || !viz.dot) {
+            return null;
+        }
+        
+        // Handle array of dots (metal transfers) - use the lead dot
+        if (Array.isArray(viz.dot)) {
+            // Find first visible dot
+            for (const dot of viz.dot) {
+                if (dot.visible && dot.position) {
+                    return dot.position.clone();
+                }
+            }
+            // Fallback to first dot if none visible
+            if (viz.dot.length > 0 && viz.dot[0].position) {
+                return viz.dot[0].position.clone();
+            }
+        } else if (viz.dot.position) {
+            return viz.dot.position.clone();
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Start tracking the first active transfer (called when 't' is pressed)
+     */
+    startTransferTracking() {
+        const activeTransfers = this.getActiveTransfers();
+        
+        if (activeTransfers.length === 0) {
+            console.log('No active transfers to track');
+            return;
+        }
+        
+        // Reset comet tracking if active
+        this.currentCometIndex = -1;
+        
+        // Start at first transfer
+        this.currentTransferIndex = 0;
+        this.trackingMode = 'transfer';
+        
+        const transferData = activeTransfers[this.currentTransferIndex];
+        console.log(`Tracking transfer ${this.currentTransferIndex + 1}/${activeTransfers.length}: ${transferData.id}`);
+        
+        this.startTracking(() => {
+            // Re-get active transfers each frame in case they change
+            const currentTransfers = this.getActiveTransfers();
+            if (this.currentTransferIndex >= 0 && this.currentTransferIndex < currentTransfers.length) {
+                return this.getTransferDotPosition(currentTransfers[this.currentTransferIndex]);
+            }
+            return null;
+        });
+    }
+    
+    /**
+     * Cycle camera to next transfer in the list
+     */
+    cycleToNextTransfer() {
+        const activeTransfers = this.getActiveTransfers();
+        
+        if (activeTransfers.length === 0) {
+            // No transfers available, stop tracking
+            if (this.currentTransferIndex >= 0) {
+                this.stopTracking();
+            }
+            return;
+        }
+        
+        // Move to next transfer, or wrap around to first
+        this.currentTransferIndex = (this.currentTransferIndex + 1) % activeTransfers.length;
+        
+        const transferData = activeTransfers[this.currentTransferIndex];
+        console.log(`Tracking transfer ${this.currentTransferIndex + 1}/${activeTransfers.length}: ${transferData.id}`);
+        
+        this.startTracking(() => {
+            const currentTransfers = this.getActiveTransfers();
+            if (this.currentTransferIndex >= 0 && this.currentTransferIndex < currentTransfers.length) {
+                return this.getTransferDotPosition(currentTransfers[this.currentTransferIndex]);
+            }
+            return null;
+        });
+    }
+    
+    /**
+     * Cycle camera to previous transfer in the list
+     */
+    cycleToPreviousTransfer() {
+        const activeTransfers = this.getActiveTransfers();
+        
+        if (activeTransfers.length === 0) {
+            // No transfers available, stop tracking
+            if (this.currentTransferIndex >= 0) {
+                this.stopTracking();
+            }
+            return;
+        }
+        
+        // Move to previous transfer, or wrap around to last
+        this.currentTransferIndex = (this.currentTransferIndex - 1 + activeTransfers.length) % activeTransfers.length;
+        
+        const transferData = activeTransfers[this.currentTransferIndex];
+        console.log(`Tracking transfer ${this.currentTransferIndex + 1}/${activeTransfers.length}: ${transferData.id}`);
+        
+        this.startTracking(() => {
+            const currentTransfers = this.getActiveTransfers();
+            if (this.currentTransferIndex >= 0 && this.currentTransferIndex < currentTransfers.length) {
+                return this.getTransferDotPosition(currentTransfers[this.currentTransferIndex]);
+            }
+            return null;
+        });
     }
 
     destroy() {

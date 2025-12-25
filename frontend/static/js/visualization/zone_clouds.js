@@ -6,11 +6,11 @@ class ZoneClouds {
         this.clouds = {}; // {zoneId: {probes: THREE.Points, metal: THREE.Points, slag: THREE.Points}}
         this.cloudData = {}; // {zoneId: {probes: [...], metal: [...], slag: [...]}}
         this.beltClouds = {}; // {zoneId: {probes: THREE.Points, metal: THREE.Points, slag: THREE.Points}} for belt zones
-        this.maxParticlesPerCloud = 2000; // Max particles per cloud type (for buffer allocation)
+        this.maxParticlesPerCloud = 4000; // Max particles per cloud type (for buffer allocation)
         
         // Maximum dot counts for each cloud type
         this.maxDots = {
-            probes: 2000,
+            probes: 4000,  // Doubled from 2000
             metal: 1200,
             slag: 1200
         };
@@ -46,19 +46,55 @@ class ZoneClouds {
         // Controls how quickly density falls off from the surface
         // Smaller = tighter cloud near surface, larger = more spread out
         this.decayScaleMultipliers = {
-            probes: 1.2,  // Inner cloud - tightest, closest to surface
+            probes: 1.2,  // Inner cloud - tighter around planet surface
             metal: 1.8,   // Middle cloud - moderate spread
             slag: 3.5     // Outer cloud - widest spread
         };
         
         // Belt zone IDs
         this.beltZoneIds = ['asteroid_belt', 'kuiper', 'kuiper_belt', 'oort_cloud'];
+        
+        // Create glow texture for probes
+        this.probeGlowTexture = this.createGlowTexture(64, 0x00FFFF);
+    }
+    
+    /**
+     * Create a procedural glow texture for glowing particles
+     * @param {number} size - Texture size in pixels
+     * @param {number} color - Base color for the glow
+     * @returns {THREE.CanvasTexture} Glow texture
+     */
+    createGlowTexture(size, color) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        
+        const center = size / 2;
+        const col = new THREE.Color(color);
+        
+        // Create radial gradient for soft glow effect
+        const gradient = ctx.createRadialGradient(center, center, 0, center, center, center);
+        
+        // Bright core that fades to transparent
+        gradient.addColorStop(0, `rgba(255, 255, 255, 1.0)`); // White hot center
+        gradient.addColorStop(0.1, `rgba(${Math.floor(col.r * 255)}, ${Math.floor(col.g * 255)}, ${Math.floor(col.b * 255)}, 0.9)`);
+        gradient.addColorStop(0.3, `rgba(${Math.floor(col.r * 255)}, ${Math.floor(col.g * 255)}, ${Math.floor(col.b * 255)}, 0.5)`);
+        gradient.addColorStop(0.6, `rgba(${Math.floor(col.r * 255)}, ${Math.floor(col.g * 255)}, ${Math.floor(col.b * 255)}, 0.2)`);
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        return texture;
     }
     
     /**
      * Calculate visible probe count:
      * - Linear 1:1 for 1-10 probes (accurate representation)
-     * - Logarithmic scaling from 10 probes to 1e21 probes (10 dots to 2000 dots)
+     * - Logarithmic scaling from 10 probes to 1e21 probes (10 dots to 4000 dots)
      * @param {number} probeCount - Number of probes
      * @returns {number} Visible particle count
      */
@@ -73,11 +109,11 @@ class ZoneClouds {
         }
         
         // Logarithmic scaling from 10 probes to 1e21 probes
-        // Formula derived from: 10 dots at 10 probes, 2000 dots at 1e21 probes
-        // dots = -89.5 + 99.5 * log10(probes)
-        // At probes=10: -89.5 + 99.5*1 = 10
-        // At probes=1e21: -89.5 + 99.5*21 = 2000
-        const particles = -89.5 + 99.5 * Math.log10(probeCount);
+        // Formula derived from: 10 dots at 10 probes, 4000 dots at 1e21 probes
+        // dots = -189.5 + 199.5 * log10(probes)
+        // At probes=10: -189.5 + 199.5*1 = 10
+        // At probes=1e21: -189.5 + 199.5*21 = 4000
+        const particles = -189.5 + 199.5 * Math.log10(probeCount);
         return Math.min(this.maxDots.probes, Math.max(10, Math.floor(particles)));
     }
     
@@ -160,15 +196,19 @@ class ZoneClouds {
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.setDrawRange(0, 0);
         
-        // Create material - smaller sizes for better visibility without clutter
+        // Create material - probes get glow effect with additive blending
+        const isProbe = cloudType === 'probes';
         const material = new THREE.PointsMaterial({
-            size: cloudType === 'slag' ? 0.025 : (cloudType === 'metal' ? 0.02 : 0.01),
+            size: isProbe ? 0.04 : (cloudType === 'slag' ? 0.025 : 0.02),
             sizeAttenuation: true,
             vertexColors: true,
             transparent: true,
-            opacity: cloudType === 'slag' ? 0.8 : 0.9,
+            opacity: isProbe ? 1.0 : (cloudType === 'slag' ? 0.8 : 0.9),
             depthWrite: false, // Prevent depth conflicts
-            depthTest: true // Still test depth but don't write
+            depthTest: true, // Still test depth but don't write
+            // Glow effect for probes
+            map: isProbe ? this.probeGlowTexture : null,
+            blending: isProbe ? THREE.AdditiveBlending : THREE.NormalBlending
         });
         
         const points = new THREE.Points(geometry, material);
@@ -177,24 +217,38 @@ class ZoneClouds {
         points.renderOrder = 100; // Render after planets
         points.frustumCulled = false; // Don't cull when camera is close
         
-        // Store cloud particle data - exponential decay distribution outward from planet surface
-        // Particles are densest near the surface and become sparser further out
+        // Store cloud particle data - now with individual orbital parameters for each probe
+        // Creates a chaotic ball of intersecting orbits around the planet
         const cloudData = [];
         for (let i = 0; i < this.maxParticlesPerCloud; i++) {
-            // Random spherical direction (uniform on sphere)
-            const theta = Math.random() * Math.PI * 2; // Azimuth angle
-            const phi = Math.acos(2 * Math.random() - 1); // Polar angle (uniform distribution)
+            // Orbital radius with exponential decay from minimum radius outward
+            // Most probes orbit close to surface, fewer further out
+            const orbitalRadius = minRadius + this.exponentialRandom(decayScale);
             
-            // Exponential decay from minimum radius outward
-            // Most particles will be close to minRadius, fewer further out
-            const radius = minRadius + this.exponentialRandom(decayScale);
+            // Random orbital inclination (0 to 180 degrees for full coverage)
+            // Use weighted distribution to favor varied inclinations for chaotic look
+            const inclination = Math.acos(2 * Math.random() - 1); // Uniform on sphere
+            
+            // Random longitude of ascending node (0 to 360 degrees)
+            // This rotates the orbital plane around the planet's polar axis
+            const ascendingNode = Math.random() * Math.PI * 2;
+            
+            // Random starting phase in orbit (0 to 360 degrees)
+            const orbitalPhase = Math.random() * Math.PI * 2;
+            
+            // Orbital speed - faster for closer orbits (Kepler's law: v ∝ 1/√r)
+            // Base speed adjusted for visual effect
+            const baseOrbitalSpeed = cloudType === 'probes' ? 0.8 : 0.3;
+            const orbitalSpeed = baseOrbitalSpeed / Math.sqrt(orbitalRadius / minRadius);
+            // Add some random variation for more chaos
+            const speedVariation = 0.8 + Math.random() * 0.4; // 80% to 120%
             
             cloudData.push({
-                theta: theta,
-                phi: phi,
-                radius: radius,
-                // Store initial offset for slight drift/movement
-                driftSpeed: (Math.random() - 0.5) * 0.001 // Very slow drift for subtle movement
+                orbitalRadius: orbitalRadius,
+                inclination: inclination,
+                ascendingNode: ascendingNode,
+                orbitalPhase: orbitalPhase,
+                orbitalSpeed: orbitalSpeed * speedVariation
             });
         }
         
@@ -233,15 +287,19 @@ class ZoneClouds {
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.setDrawRange(0, 0);
         
-        // Create material - slightly larger for belt visibility
+        // Create material - probes get glow effect, slightly larger for belt visibility
+        const isProbe = cloudType === 'probes';
         const material = new THREE.PointsMaterial({
-            size: cloudType === 'slag' ? 0.035 : (cloudType === 'metal' ? 0.03 : 0.025),
+            size: isProbe ? 0.06 : (cloudType === 'slag' ? 0.035 : 0.03),
             sizeAttenuation: true,
             vertexColors: true,
             transparent: true,
-            opacity: cloudType === 'slag' ? 0.8 : 0.9,
+            opacity: isProbe ? 1.0 : (cloudType === 'slag' ? 0.8 : 0.9),
             depthWrite: false,
-            depthTest: true
+            depthTest: true,
+            // Glow effect for probes
+            map: isProbe ? this.probeGlowTexture : null,
+            blending: isProbe ? THREE.AdditiveBlending : THREE.NormalBlending
         });
         
         const points = new THREE.Points(geometry, material);
@@ -328,7 +386,21 @@ class ZoneClouds {
                 return;
             }
             
-            const planetRadius = this.solarSystem.logScaleRadius(planetInfo.radius_km);
+            // Use the planet's actual visual radius (stored in userData.originalRadius after scaling)
+            // This ensures probe clouds are sized correctly relative to the visible planet
+            let planetRadius;
+            if (planet.userData && planet.userData.originalRadius) {
+                planetRadius = planet.userData.originalRadius;
+            } else {
+                // Fallback: calculate with same scaling as createPlanet does
+                planetRadius = this.solarSystem.logScaleRadius(planetInfo.radius_km);
+                // Apply the same rocky planet scaling as createPlanet()
+                if (this.solarSystem.rockyPlanets && this.solarSystem.rockyPlanets.includes(zone.id)) {
+                    planetRadius = Math.max(0.12, planetRadius * 1.5);
+                } else {
+                    planetRadius = Math.max(0.08, planetRadius);
+                }
+            }
             
             // Create three clouds per zone
             this.clouds[zone.id] = {
@@ -365,6 +437,11 @@ class ZoneClouds {
      * @param {Object} zone - Zone data from orbital mechanics
      */
     initBeltClouds(zone) {
+        // Skip if already initialized
+        if (this.beltClouds[zone.id]) {
+            return;
+        }
+        
         const AU_KM = this.solarSystem.AU_KM;
         let beltConfig;
         
@@ -395,9 +472,10 @@ class ZoneClouds {
                 verticalSpread: 0 // Not used for spherical
             };
         } else if (zone.id === 'dyson_sphere') {
-            // Dyson sphere - thin ring at 2.5 times Mercury's orbital radius
-            const mercuryOrbit = this.solarSystem.logScaleOrbit(this.solarSystem.planetData.mercury.orbit_km);
-            const dysonOrbit = mercuryOrbit * 2.5;
+            // Dyson sphere - use the stored orbit radius from solar system (75% of Mercury's orbit)
+            // This matches the actual Dyson swarm visualization position
+            const dysonOrbit = this.solarSystem.dysonOrbitRadius || 
+                (this.solarSystem.scaleRockyPlanetOrbit(this.solarSystem.planetData.mercury.orbit_km) * 0.75);
             // Create a thin ring around the Dyson orbit
             beltConfig = {
                 innerRadius: dysonOrbit * 0.9,
@@ -492,7 +570,21 @@ class ZoneClouds {
             return;
         }
         
-        const planetRadius = this.solarSystem.logScaleRadius(planetInfo.radius_km);
+        // Use the planet's actual visual radius (stored in userData.originalRadius after scaling)
+        // This ensures probe clouds are sized correctly relative to the visible planet
+        let planetRadius;
+        if (planet.userData && planet.userData.originalRadius) {
+            planetRadius = planet.userData.originalRadius;
+        } else {
+            // Fallback: calculate with same scaling as createPlanet does
+            planetRadius = this.solarSystem.logScaleRadius(planetInfo.radius_km);
+            // Apply the same rocky planet scaling as createPlanet()
+            if (this.solarSystem.rockyPlanets && this.solarSystem.rockyPlanets.includes(zoneId)) {
+                planetRadius = Math.max(0.12, planetRadius * 1.5);
+            } else {
+                planetRadius = Math.max(0.08, planetRadius);
+            }
+        }
         
         // Create three clouds per zone
         this.clouds[zoneId] = {
@@ -532,7 +624,30 @@ class ZoneClouds {
             this.init(this.solarSystem.orbitalData);
         }
         
+        // Ensure clouds exist for any zone that has probes (lazy creation for zones missed during init)
+        Object.keys(probesByZone).forEach(zoneId => {
+            const probeCounts = probesByZone[zoneId] || {};
+            const totalProbes = Object.values(probeCounts).reduce((sum, count) => sum + (count || 0), 0);
+            if (totalProbes > 0 && !this.clouds[zoneId] && !this.beltClouds[zoneId]) {
+                // Check if this is a belt zone
+                if (this.beltZoneIds.includes(zoneId)) {
+                    // Belt zones need to be initialized through initBeltClouds
+                    const orbitalZone = this.solarSystem.orbitalData?.orbital_zones?.find(z => z.id === zoneId);
+                    if (orbitalZone) {
+                        console.log(`ZoneClouds: Lazy creating belt clouds for ${zoneId}`);
+                        this.initBeltClouds(orbitalZone);
+                    }
+                } else {
+                    // Planet zone - use ensureCloudsForZone
+                    console.log(`ZoneClouds: Lazy creating clouds for ${zoneId}`);
+                    this.ensureCloudsForZone(zoneId);
+                }
+            }
+        });
+        
         // Update each planet zone's clouds
+        // NOTE: Metal and slag are now handled by the dynamic particle system in solar_system.js
+        // which spawns particles from the planet position and animates them into orbit
         Object.keys(this.clouds).forEach(zoneId => {
             const zoneClouds = this.clouds[zoneId];
             if (!zoneClouds) return;
@@ -541,23 +656,19 @@ class ZoneClouds {
             const probeCounts = probesByZone[zoneId] || {};
             const totalProbes = Object.values(probeCounts).reduce((sum, count) => sum + (count || 0), 0);
             
-            // Get zone data
-            const zone = zones[zoneId] || {};
-            const storedMetal = zone.stored_metal || 0;
-            const slagMass = zone.slag_mass || 0;
-            
             // Calculate visible counts using type-specific scaling
             const probeCount = this.calculateProbeVisibleCount(totalProbes);
-            const metalCount = this.calculateMetalVisibleCount(storedMetal);
-            const slagCount = this.calculateSlagVisibleCount(slagMass);
             
-            // Update each cloud type
+            // Update only probe clouds - metal/slag handled by solar_system.js resource particles
             this.updateCloudParticles(zoneClouds.probes, 'probes', probeCount, zoneId);
-            this.updateCloudParticles(zoneClouds.metal, 'metal', metalCount, zoneId);
-            this.updateCloudParticles(zoneClouds.slag, 'slag', slagCount, zoneId);
+            
+            // Hide metal and slag clouds (handled by dynamic particle system)
+            if (zoneClouds.metal) zoneClouds.metal.geometry.setDrawRange(0, 0);
+            if (zoneClouds.slag) zoneClouds.slag.geometry.setDrawRange(0, 0);
         });
         
         // Update each belt zone's clouds
+        // NOTE: Metal and slag are now handled by the dynamic particle system in solar_system.js
         Object.keys(this.beltClouds).forEach(zoneId => {
             const zoneClouds = this.beltClouds[zoneId];
             if (!zoneClouds) return;
@@ -566,20 +677,15 @@ class ZoneClouds {
             const probeCounts = probesByZone[zoneId] || {};
             const totalProbes = Object.values(probeCounts).reduce((sum, count) => sum + (count || 0), 0);
             
-            // Get zone data
-            const zone = zones[zoneId] || {};
-            const storedMetal = zone.stored_metal || 0;
-            const slagMass = zone.slag_mass || 0;
-            
             // Calculate visible counts using type-specific scaling
             const probeCount = this.calculateProbeVisibleCount(totalProbes);
-            const metalCount = this.calculateMetalVisibleCount(storedMetal);
-            const slagCount = this.calculateSlagVisibleCount(slagMass);
             
-            // Update each belt cloud type
+            // Update only probe clouds - metal/slag handled by solar_system.js resource particles
             this.updateBeltCloudParticles(zoneClouds.probes, 'probes', probeCount, zoneId);
-            this.updateBeltCloudParticles(zoneClouds.metal, 'metal', metalCount, zoneId);
-            this.updateBeltCloudParticles(zoneClouds.slag, 'slag', slagCount, zoneId);
+            
+            // Hide metal and slag clouds (handled by dynamic particle system)
+            if (zoneClouds.metal) zoneClouds.metal.geometry.setDrawRange(0, 0);
+            if (zoneClouds.slag) zoneClouds.slag.geometry.setDrawRange(0, 0);
         });
         
         // Update transit particles (resources in transit between zones)
@@ -744,16 +850,13 @@ class ZoneClouds {
             const data = cloudData[i];
             const idx = i * 3;
             
-            // Calculate position in 3D spherical cloud around planet
-            // Convert spherical coordinates (theta, phi, radius) to cartesian
-            const x = data.radius * Math.sin(data.phi) * Math.cos(data.theta);
-            const y = data.radius * Math.sin(data.phi) * Math.sin(data.theta);
-            const z = data.radius * Math.cos(data.phi);
+            // Calculate position using orbital mechanics
+            const orbitalPos = this.calculateOrbitalPosition(data);
             
-            // Position relative to planet's current position (cloud orbits sun with planet)
-            positions[idx] = planetX + x;
-            positions[idx + 1] = planetY + y;
-            positions[idx + 2] = planetZ + z;
+            // Position relative to planet's current position (probe orbits planet, planet orbits sun)
+            positions[idx] = planetX + orbitalPos.x;
+            positions[idx + 1] = planetY + orbitalPos.y;
+            positions[idx + 2] = planetZ + orbitalPos.z;
             
             // Set color with slight variation
             const colorVariation = cloudType === 'metal' ? 0.1 : 0.2;
@@ -856,7 +959,39 @@ class ZoneClouds {
     }
     
     /**
+     * Calculate probe position from orbital parameters
+     * Creates a 3D position for a probe orbiting in an inclined elliptical orbit
+     * @param {Object} data - Orbital data (orbitalRadius, inclination, ascendingNode, orbitalPhase)
+     * @returns {Object} {x, y, z} position relative to planet center
+     */
+    calculateOrbitalPosition(data) {
+        const { orbitalRadius, inclination, ascendingNode, orbitalPhase } = data;
+        
+        // Start with a circular orbit in the XZ plane (y = 0)
+        const x0 = orbitalRadius * Math.cos(orbitalPhase);
+        const z0 = orbitalRadius * Math.sin(orbitalPhase);
+        const y0 = 0;
+        
+        // Rotate around X axis by inclination
+        const cosI = Math.cos(inclination);
+        const sinI = Math.sin(inclination);
+        const x1 = x0;
+        const y1 = y0 * cosI - z0 * sinI;
+        const z1 = y0 * sinI + z0 * cosI;
+        
+        // Rotate around Y axis by ascending node (longitude of ascending node)
+        const cosN = Math.cos(ascendingNode);
+        const sinN = Math.sin(ascendingNode);
+        const x = x1 * cosN - z1 * sinN;
+        const y = y1;
+        const z = x1 * sinN + z1 * cosN;
+        
+        return { x, y, z };
+    }
+    
+    /**
      * Update cloud positions - clouds orbit sun with their planets
+     * Probes now orbit around their planet in individual orbits
      * @param {number} deltaTime - Time delta
      */
     update(deltaTime) {
@@ -876,29 +1011,24 @@ class ZoneClouds {
                 const geometry = cloud.geometry;
                 const visibleCount = geometry.drawRange.count;
                 
-                // Update particle positions - clouds move with planet as it orbits sun
-                // Add subtle drift for visual interest (very slow)
+                // Update particle positions - each probe orbits the planet individually
                 for (let i = 0; i < visibleCount; i++) {
                     const data = cloudData[i];
                     const idx = i * 3;
                     
-                    // Apply subtle drift to theta for slow rotation
-                    data.theta += data.driftSpeed * deltaTime;
-                    if (data.theta > Math.PI * 2) {
-                        data.theta -= Math.PI * 2;
-                    } else if (data.theta < 0) {
-                        data.theta += Math.PI * 2;
+                    // Advance orbital phase (probe moves along its orbit)
+                    data.orbitalPhase += data.orbitalSpeed * deltaTime;
+                    if (data.orbitalPhase > Math.PI * 2) {
+                        data.orbitalPhase -= Math.PI * 2;
                     }
                     
-                    // Convert spherical coordinates to cartesian
-                    const x = data.radius * Math.sin(data.phi) * Math.cos(data.theta);
-                    const y = data.radius * Math.sin(data.phi) * Math.sin(data.theta);
-                    const z = data.radius * Math.cos(data.phi);
+                    // Calculate position in orbit using orbital mechanics
+                    const orbitalPos = this.calculateOrbitalPosition(data);
                     
-                    // Position relative to planet's current position (cloud orbits sun with planet)
-                    positions[idx] = planet.position.x + x;
-                    positions[idx + 1] = planet.position.y + y;
-                    positions[idx + 2] = planet.position.z + z;
+                    // Position relative to planet's current position (probe orbits planet, planet orbits sun)
+                    positions[idx] = planet.position.x + orbitalPos.x;
+                    positions[idx + 1] = planet.position.y + orbitalPos.y;
+                    positions[idx + 2] = planet.position.z + orbitalPos.z;
                 }
                 
                 // Update geometry
@@ -946,5 +1076,135 @@ class ZoneClouds {
                 geometry.attributes.position.needsUpdate = true;
             });
         });
+    }
+    
+    /**
+     * Add an arriving particle to a zone's cloud at a specific position
+     * Called when a transfer arrives at a zone to visually integrate the dot into the orbiting cloud
+     * @param {string} zoneId - Zone ID where the particle arrives
+     * @param {string} resourceType - 'probe' or 'metal' 
+     * @param {THREE.Vector3} arrivalPosition - World position where the transfer arrived
+     * @returns {boolean} True if particle was added, false if zone is full or invalid
+     */
+    addArrivingParticle(zoneId, resourceType, arrivalPosition) {
+        // Map resource type to cloud type
+        const cloudType = resourceType === 'metal' ? 'metal' : 'probes';
+        
+        // Check if this is a belt zone or planet zone
+        const isBeltZone = this.beltZoneIds.includes(zoneId) || zoneId === 'dyson_sphere';
+        const zoneClouds = isBeltZone ? this.beltClouds[zoneId] : this.clouds[zoneId];
+        
+        if (!zoneClouds) {
+            return false;
+        }
+        
+        const cloud = zoneClouds[cloudType];
+        if (!cloud || !cloud.userData) {
+            return false;
+        }
+        
+        const { cloudData, positions, colors } = cloud.userData;
+        const geometry = cloud.geometry;
+        const currentCount = geometry.drawRange.count;
+        const maxCount = this.maxDots[cloudType];
+        
+        // Check if zone is already at max capacity
+        if (currentCount >= maxCount) {
+            return false;
+        }
+        
+        // Check if we're at the buffer limit
+        if (currentCount >= this.maxParticlesPerCloud) {
+            return false;
+        }
+        
+        // Get planet/zone position to calculate relative arrival position
+        let zonePosition = new THREE.Vector3(0, 0, 0);
+        if (!isBeltZone) {
+            const planet = this.solarSystem.planets[zoneId];
+            if (planet) {
+                zonePosition = planet.position.clone();
+            }
+        }
+        
+        // Calculate arrival position relative to the zone center
+        const relativePos = arrivalPosition.clone().sub(zonePosition);
+        
+        // Calculate orbital parameters from arrival position
+        const orbitalRadius = relativePos.length();
+        
+        // Calculate the phase (angle) from the arrival position
+        // atan2(z, x) gives angle in XZ plane (y is up)
+        const orbitalPhase = Math.atan2(relativePos.z, relativePos.x);
+        
+        // Calculate inclination from the Y offset
+        // inclination = acos(y / radius) but we want angle from XZ plane
+        const inclination = orbitalRadius > 0 ? Math.acos(Math.abs(relativePos.y) / orbitalRadius) : Math.PI / 2;
+        
+        // Ascending node - random for variety, but could be calculated from direction
+        const ascendingNode = Math.random() * Math.PI * 2;
+        
+        // Orbital speed - faster for closer orbits (Kepler's law)
+        const baseOrbitalSpeed = cloudType === 'probes' ? 0.8 : 0.3;
+        const minRadius = cloud.userData.minRadius || 0.5;
+        const orbitalSpeed = baseOrbitalSpeed / Math.sqrt(Math.max(orbitalRadius / minRadius, 0.5));
+        const speedVariation = 0.8 + Math.random() * 0.4;
+        
+        // Update cloudData with the new particle's orbital parameters
+        if (isBeltZone) {
+            // Belt zones use different data structure
+            const beltConfig = cloud.userData.beltConfig;
+            if (beltConfig && beltConfig.isSpherical) {
+                // Oort cloud - spherical
+                cloudData[currentCount] = {
+                    theta: Math.atan2(relativePos.z, relativePos.x),
+                    phi: orbitalRadius > 0 ? Math.acos(relativePos.y / orbitalRadius) : Math.PI / 2,
+                    distance: orbitalRadius,
+                    isSpherical: true,
+                    orbitalSpeed: 0.0001 + Math.random() * 0.0002
+                };
+            } else {
+                // Ring distribution
+                cloudData[currentCount] = {
+                    angle: Math.atan2(relativePos.z, relativePos.x),
+                    distance: Math.sqrt(relativePos.x * relativePos.x + relativePos.z * relativePos.z),
+                    yOffset: relativePos.y,
+                    isSpherical: false,
+                    orbitalSpeed: 0.0005 + Math.random() * 0.001
+                };
+            }
+        } else {
+            // Planet zones use orbital mechanics data
+            cloudData[currentCount] = {
+                orbitalRadius: orbitalRadius,
+                inclination: inclination,
+                ascendingNode: ascendingNode,
+                orbitalPhase: orbitalPhase,
+                orbitalSpeed: orbitalSpeed * speedVariation
+            };
+        }
+        
+        // Set initial position
+        const idx = currentCount * 3;
+        positions[idx] = arrivalPosition.x;
+        positions[idx + 1] = arrivalPosition.y;
+        positions[idx + 2] = arrivalPosition.z;
+        
+        // Set color
+        const color = this.colors[cloudType];
+        const colorVariation = cloudType === 'metal' ? 0.1 : 0.2;
+        colors[idx] = Math.max(0, Math.min(1, color.r + (Math.random() - 0.5) * colorVariation));
+        colors[idx + 1] = Math.max(0, Math.min(1, color.g + (Math.random() - 0.5) * colorVariation));
+        colors[idx + 2] = Math.max(0, Math.min(1, color.b + (Math.random() - 0.5) * colorVariation));
+        
+        // Update geometry
+        geometry.attributes.position.needsUpdate = true;
+        geometry.attributes.color.needsUpdate = true;
+        geometry.setDrawRange(0, currentCount + 1);
+        
+        // Ensure cloud is visible
+        cloud.visible = true;
+        
+        return true;
     }
 }

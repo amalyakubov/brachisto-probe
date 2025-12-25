@@ -32,13 +32,14 @@ class StructuresVisualization {
     }
 
     /**
-     * Calculate visible count: 100 real structures = 1 visual structure
-     * 100 → 1, 200 → 2, 300 → 3, etc.
+     * Calculate visible count: 10 real structures = 1 visual structure
+     * 1-10 → 1, 11-20 → 2, 21-30 → 3, etc.
      */
     calculateVisibleCount(count) {
         if (count <= 0) return 0;
-        // Each visual structure represents 100 real structures
-        return Math.floor(count / 100);
+        // Each visual structure represents up to 10 real structures
+        // Always show at least 1 visual if any structures exist
+        return Math.ceil(count / 10);
     }
 
     /**
@@ -265,9 +266,12 @@ class StructuresVisualization {
                 }
 
                 // Calculate required mesh count
-                // Each visual structure represents 100 real structures
-                // 100 → 1, 200 → 2, 300 → 3, etc.
-                const requiredCount = this.calculateVisibleCount(count);
+                // Each visual structure represents up to 10 real structures
+                // 1-10 → 1, 11-20 → 2, 21-30 → 3, etc.
+                // Exception: mass drivers only ever show 1 visual
+                const requiredCount = buildingId === 'mass_driver' ? 
+                    (count > 0 ? 1 : 0) : 
+                    this.calculateVisibleCount(count);
 
                 // Get or create mesh array for this building type
                 if (!zoneGroup[buildingId]) {
@@ -291,25 +295,31 @@ class StructuresVisualization {
                         
                         // Set up positioning based on structure type
                         if (buildingId === 'mass_driver') {
-                            // Mass driver: positioned tangent to orbital circle with slight deviations
+                            // Mass driver: positioned sunwards from the planet (between planet and sun)
                             const planet = planetData.planet;
-                            const orbitalRadius = planet.userData?.radius || 2.0;
+                            const orbitalRadius = planet.userData?.radius || 2.0; // Planet's orbital radius
+                            const planetRadius = planetData.planetRadius; // Visual size of the planet
                             
-                            // Distance along tangent from planet (small fraction of orbital radius)
-                            const distanceFromPlanet = orbitalRadius * 0.1; // 10% of orbital radius
+                            // Mass drivers are positioned sunwards from the planet
+                            // About 3 planet radii towards the sun
+                            const sunwardOffset = 3 * planetRadius;
                             
-                            // Deviation angle from perfect tangent (slight variations)
-                            const deviationAngle = (Math.random() - 0.5) * 0.2; // ±0.1 radians deviation
+                            // Each additional mass driver is placed further sunward
+                            const massDriverLength = 0.8; // Length of the cylinder
+                            const spacing = massDriverLength * 0.5; // Space between mass drivers (radially)
                             
-                            // Slight elevation variation
-                            const elevation = (Math.random() - 0.5) * 0.2;
+                            // Slight elevation variation for multiple mass drivers
+                            const elevation = (i % 2 === 0) ? 0.1 : -0.1;
                             
                             mesh.userData = {
                                 zoneId: zoneId,
                                 buildingId: buildingId,
                                 isMassDriver: true,
-                                distanceFromPlanet: distanceFromPlanet,
-                                deviationAngle: deviationAngle,
+                                orbitalRadius: orbitalRadius,
+                                planetRadius: planetRadius,
+                                driverIndex: i,
+                                sunwardOffset: sunwardOffset,
+                                spacing: spacing,
                                 elevation: elevation
                             };
                             
@@ -551,41 +561,43 @@ class StructuresVisualization {
         if (!userData) return;
 
         if (userData.isMassDriver) {
-            // Mass driver: positioned tangent to orbital circle with slight deviations
+            // Mass driver: positioned sunwards from the planet (between planet and sun)
             const planet = planetData.planet;
-            const planetPos = planetData.planetPosition;
-            const orbitalRadius = planet.userData?.radius || 2.0;
+            const orbitalRadius = userData.orbitalRadius;
             const planetOrbitalAngle = planet.userData?.orbitalAngle || 0;
             
-            // Calculate tangent direction (perpendicular to radius from sun to planet)
-            const radiusDirX = Math.cos(planetOrbitalAngle);
-            const radiusDirZ = Math.sin(planetOrbitalAngle);
-            const tangentX = -radiusDirZ; // Perpendicular to radius
-            const tangentZ = radiusDirX;
+            // Get the planet's current position in its orbit
+            const planetX = Math.cos(planetOrbitalAngle) * orbitalRadius;
+            const planetZ = Math.sin(planetOrbitalAngle) * orbitalRadius;
             
-            // Position along tangent with slight deviation
-            const deviationAngle = userData.deviationAngle || 0;
-            const deviation = Math.sin(deviationAngle) * 0.1; // Small deviation from tangent
+            // Calculate direction from planet to sun (sun is at origin)
+            const toSunX = -planetX;
+            const toSunZ = -planetZ;
+            const toSunLength = Math.sqrt(toSunX * toSunX + toSunZ * toSunZ);
+            const toSunNormX = toSunX / toSunLength;
+            const toSunNormZ = toSunZ / toSunLength;
             
-            // Calculate position: start from planet, move along tangent
-            const distanceFromPlanet = userData.distanceFromPlanet || (orbitalRadius * 0.1);
-            const tangentOffsetX = tangentX * distanceFromPlanet;
-            const tangentOffsetZ = tangentZ * distanceFromPlanet;
+            // Position the mass driver sunwards from the planet
+            // Base offset is 2 planet radii, plus spacing for additional drivers
+            const sunwardOffset = userData.sunwardOffset + (userData.driverIndex * userData.spacing);
             
-            // Add perpendicular deviation
-            const perpX = radiusDirX * deviation;
-            const perpZ = radiusDirZ * deviation;
+            const x = planetX + toSunNormX * sunwardOffset;
+            const z = planetZ + toSunNormZ * sunwardOffset;
+            const y = userData.elevation || 0;
             
-            mesh.position.copy(planetPos);
-            mesh.position.add(new THREE.Vector3(
-                tangentOffsetX + perpX,
-                userData.elevation || 0,
-                tangentOffsetZ + perpZ
-            ));
+            mesh.position.set(x, y, z);
             
-            // Orient along tangent direction (with slight deviation)
-            const lookDirection = new THREE.Vector3(tangentX, 0, tangentZ).normalize();
-            const lookPoint = mesh.position.clone().add(lookDirection);
+            // Calculate tangent direction (prograde - perpendicular to radius, counter-clockwise)
+            // Use the planet's orbital angle for tangent calculation
+            const tangentX = -Math.sin(planetOrbitalAngle); // Tangent is perpendicular to radius
+            const tangentZ = Math.cos(planetOrbitalAngle);
+            
+            // Orient the cylinder along the tangent direction (prograde)
+            const lookPoint = new THREE.Vector3(
+                x + tangentX,
+                y,
+                z + tangentZ
+            );
             mesh.lookAt(lookPoint);
             mesh.rotateX(Math.PI / 2); // Adjust for cylinder orientation
         } else if (userData.isPowerStation) {
@@ -714,6 +726,47 @@ class StructuresVisualization {
                 });
             });
         });
+    }
+
+    /**
+     * Get mass driver position and angle for a zone (used by transfer visualization)
+     * @param {string} zoneId - The zone ID
+     * @returns {Object|null} {position: THREE.Vector3, angle: number, orbitalRadius: number} or null if no mass driver
+     */
+    getMassDriverData(zoneId) {
+        const zoneGroup = this.structureGroups[zoneId];
+        if (!zoneGroup || !zoneGroup['mass_driver'] || zoneGroup['mass_driver'].length === 0) {
+            return null;
+        }
+        
+        // Get the first mass driver's position and orbital data
+        const massDriver = zoneGroup['mass_driver'][0];
+        const userData = massDriver.userData;
+        
+        if (!userData || !userData.isMassDriver) {
+            return null;
+        }
+        
+        // Get current planet orbital angle
+        const planetData = this.getPlanetData(zoneId);
+        if (!planetData) {
+            return null;
+        }
+        
+        const planet = planetData.planet;
+        const planetOrbitalAngle = planet.userData?.orbitalAngle || 0;
+        const orbitalRadius = userData.orbitalRadius;
+        
+        // Mass driver is positioned sunwards from the planet
+        // Calculate its effective orbital radius (planet radius minus sunward offset)
+        const sunwardOffset = userData.sunwardOffset + (userData.driverIndex * userData.spacing);
+        const effectiveRadius = orbitalRadius - sunwardOffset;
+        
+        return {
+            position: massDriver.position.clone(),
+            angle: planetOrbitalAngle, // Same angle as planet since it's radially offset
+            orbitalRadius: effectiveRadius
+        };
     }
 
     /**

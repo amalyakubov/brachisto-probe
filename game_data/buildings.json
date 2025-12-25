@@ -43,10 +43,11 @@
     "mass_driver": {
       "id": "mass_driver",
       "name": "Mass Driver",
-      "description": "Electromagnetic launcher for orbital mass transfers. Reduces travel time by 90% for probes and metal leaving this zone. Required at source zone for metal transfers.",
+      "description": "Electromagnetic launcher for orbital mass transfers. Reduces travel time for probes and metal leaving this zone. Required for metal transfers. Each mass driver can launch up to 100 GT/day. Speed improves dramatically with energy converter, propulsion, and thrust research.",
       "mass_multiplier": 500,
       "base_capacity_kg": 10000,
       "base_delta_v": 5000,
+      "metal_launch_capacity_kg_per_day": 100000000000000,
       "energy_cost_multiplier": 200,
       "allowed_orbital_zones": ["mercury", "venus", "earth", "mars", "asteroid_belt", "jupiter", "saturn", "uranus", "neptune", "kuiper"],
       "orbital_efficiency": {

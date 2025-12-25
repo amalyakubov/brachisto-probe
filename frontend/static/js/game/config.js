@@ -1,4 +1,16 @@
-/** Game configuration constants */
+/** 
+ * Game configuration constants
+ * 
+ * NOTE: Many of these values are now also defined in game_data/economic_rules.json
+ * for centralized game balancing. The economic_rules.json file takes precedence
+ * when loaded. These values serve as fallbacks.
+ * 
+ * See game_data/economic_rules.json for:
+ * - Base probe rates (mining, building)
+ * - Skill coefficients for production calculations
+ * - Alpha factors for tech tree scaling
+ * - Crowding penalty parameters
+ */
 class Config {
     // Game configuration
     static DYSON_SPHERE_TARGET_MASS = 20e22;  // kg, base value (can be reduced by research)
@@ -23,12 +35,14 @@ class Config {
     static DYSON_POWER_PER_KG = 2500;  // watts per kg (5 kW/kg = 5 kW/m² / 1 kg/m²)
     
     // All rates are per-day (fundamental time unit)
+    // NOTE: These are fallbacks - see game_data/economic_rules.json for primary values
     static PROBE_MASS = 100;  // kg per probe
     static PROBE_HARVEST_RATE = 100.0;  // kg/day per probe (base mining rate - mines 100kg mass per day)
     static PROBE_BUILD_RATE = 20.0;  // kg/day per probe (base build power)
     static PROBE_ENERGY_CONSUMPTION = 250000;  // watts (250kW) - base rate for buildings (constructing rate)
     
     // Alpha factors for tech tree scaling (performance benefits)
+    // NOTE: These are fallbacks - see game_data/economic_rules.json for primary values
     // Higher alpha = more benefit from research
     static ALPHA_STRUCTURE_FACTOR = 0.8;   // Structures benefit most
     static ALPHA_PROBE_FACTOR = 0.75;      // Probes benefit slightly less

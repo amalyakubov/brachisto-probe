@@ -6,23 +6,64 @@
  * - Building rates
  * - Refining rates
  * - Probe production rates
+ * 
+ * Economic rules are loaded from game_data/economic_rules.json
  */
 
 class ProductionCalculator {
     constructor(orbitalMechanics) {
         this.orbitalMechanics = orbitalMechanics;
         
-        // Base rates (per probe, per day)
+        // Default values (will be overwritten by economic rules)
         this.BASE_MINING_RATE = 100.0;      // kg/day per probe
-        this.BASE_BUILDING_RATE = 20.0;    // kg/day per probe
-        
-        // Crowding penalty constants
-        // At 1% probe mass relative to original zone mass: 100% efficiency (no penalty)
-        // At 90% probe mass relative to original zone mass: 2% efficiency (98% reduction)
-        // Formula: efficiency = exp(-k * (ratio - threshold)) for ratio > threshold
-        // Solving: 0.02 = exp(-k * (0.90 - 0.01)) -> k = -ln(0.02) / 0.89 ≈ 4.395
+        this.BASE_BUILDING_RATE = 20.0;     // kg/day per probe
         this.CROWDING_THRESHOLD = 0.01;     // 1% - penalty starts after this ratio
         this.CROWDING_DECAY_RATE = 4.395;   // Exponential decay constant
+        this.GEOMETRIC_SCALING_EXPONENT = 2.1;
+        
+        // Skill coefficients (loaded from economic rules)
+        this.skillCoefficients = null;
+        this.economicRules = null;
+    }
+    
+    /**
+     * Initialize with economic rules
+     * @param {Object} economicRules - Economic rules from data loader
+     */
+    initializeEconomicRules(economicRules) {
+        if (!economicRules) return;
+        
+        this.economicRules = economicRules;
+        
+        // Load probe base rates
+        if (economicRules.probe) {
+            this.BASE_MINING_RATE = economicRules.probe.base_mining_rate_kg_per_day || 100.0;
+            this.BASE_BUILDING_RATE = economicRules.probe.base_build_rate_kg_per_day || 20.0;
+        }
+        
+        // Load crowding parameters
+        if (economicRules.crowding) {
+            this.CROWDING_THRESHOLD = economicRules.crowding.threshold_ratio || 0.01;
+            this.CROWDING_DECAY_RATE = economicRules.crowding.decay_rate || 4.395;
+        }
+        
+        // Load structure parameters
+        if (economicRules.structures) {
+            this.GEOMETRIC_SCALING_EXPONENT = economicRules.structures.geometric_scaling_exponent || 2.1;
+        }
+        
+        // Load skill coefficients
+        this.skillCoefficients = economicRules.skill_coefficients || null;
+    }
+    
+    /**
+     * Get skill coefficient for a category
+     * @param {string} category - Category name (e.g., 'probe_mining', 'probe_building')
+     * @returns {Object|null} Skill coefficients for the category
+     */
+    getSkillCoefficients(category) {
+        if (!this.skillCoefficients) return null;
+        return this.skillCoefficients[category] || null;
     }
     
     /**
@@ -113,17 +154,78 @@ class ProductionCalculator {
     }
     
     /**
+     * Build skill values array from coefficients and skills
+     * @param {Object} coefficients - Skill coefficients { skillName: coefficient }
+     * @param {Object} skills - Current skills from research
+     * @returns {Array<number>} Array of (coefficient * skill) values
+     */
+    buildSkillValues(coefficients, skills) {
+        if (!coefficients) return [1.0];
+        
+        const values = [];
+        for (const [skillName, coefficient] of Object.entries(coefficients)) {
+            if (skillName === 'description') continue; // Skip description field
+            
+            // Map skill names to actual skill values
+            let skillValue = 1.0;
+            switch (skillName) {
+                case 'robotic':
+                    skillValue = skills.robotic || skills.manipulation || 1.0;
+                    break;
+                case 'computer':
+                    skillValue = skills.computer?.total || 1.0;
+                    break;
+                case 'solar_pv':
+                    skillValue = skills.solar_pv || skills.energy_collection || 1.0;
+                    break;
+                default:
+                    skillValue = skills[skillName] || 1.0;
+            }
+            
+            values.push(coefficient * skillValue);
+        }
+        
+        return values.length > 0 ? values : [1.0];
+    }
+    
+    /**
      * Calculate all tech tree upgrade factors once per tick
+     * Uses skill coefficients from economic rules if available
      * @param {Object} skills - Current skills from research
      * @param {number} alpha - Tech growth scale factor (from config)
      * @returns {Object} All upgrade factors
      */
     calculateAllUpgradeFactors(skills, alpha) {
+        // Use economic rules if available, otherwise fall back to hardcoded values
+        if (this.skillCoefficients) {
+            const probeMiningCoeffs = this.skillCoefficients.probe_mining;
+            const probeBuildingCoeffs = this.skillCoefficients.probe_building;
+            const energyGenCoeffs = this.skillCoefficients.energy_generation;
+            
+            const probeMiningValues = this.buildSkillValues(probeMiningCoeffs, skills);
+            const probeBuildValues = this.buildSkillValues(probeBuildingCoeffs, skills);
+            const energyGenerationValues = this.buildSkillValues(energyGenCoeffs, skills);
+            
+            const probeMiningFactor = this.calculateTechTreeUpgradeFactor(probeMiningValues, alpha);
+            const probeBuildFactor = this.calculateTechTreeUpgradeFactor(probeBuildValues, alpha);
+            const energyGenerationFactor = this.calculateTechTreeUpgradeFactor(energyGenerationValues, alpha);
+            
+            return {
+                probe_mining: probeMiningFactor,
+                probe_build: probeBuildFactor,
+                probe_replicate: probeBuildFactor,
+                factory_replicate: probeBuildFactor,
+                refinery_mine: probeMiningFactor,
+                energy_generation: energyGenerationFactor
+            };
+        }
+        
+        // Fallback to hardcoded values for backward compatibility
         const roboticSkill = skills.robotic || skills.manipulation || 1.0;
         const computerSkill = skills.computer?.total || 1.0;
         const locomotionSkill = skills.locomotion || 1.0;
         const energyTransportSkill = skills.energy_transport || 1.0;
-        const acdsSkill = skills.acds || 1.0; // ACDS skill (defaults to 1.0 if not present)
+        const acdsSkill = skills.acds || 1.0;
         const productionSkill = skills.production || 1.0;
         const energyCollectionSkill = skills.energy_collection || skills.solar_pv || 1.0;
         
@@ -147,29 +249,20 @@ class ProductionCalculator {
         ];
         const probeBuildFactor = this.calculateTechTreeUpgradeFactor(probeBuildValues, alpha);
         
-        // Probe replicate: same as probe build (replication is a form of building)
-        const probeReplicateFactor = probeBuildFactor;
-        
-        // Factory replicate: same as probe replicate (factories replicate probes)
-        const factoryReplicateFactor = probeBuildFactor;
-        
-        // Refinery mine: same as probe mining (refineries mine metal)
-        const refineryMineFactor = probeMiningFactor;
-        
-        // Energy generation: depends on energy collection and transport
+        // Energy generation
         const energyGenerationValues = [
             1.0 * energyCollectionSkill,
             0.5 * energyTransportSkill,
-            0.3 * computerSkill  // Computer systems help optimize energy collection
+            0.3 * computerSkill
         ];
         const energyGenerationFactor = this.calculateTechTreeUpgradeFactor(energyGenerationValues, alpha);
         
         return {
             probe_mining: probeMiningFactor,
             probe_build: probeBuildFactor,
-            probe_replicate: probeReplicateFactor,
-            factory_replicate: factoryReplicateFactor,
-            refinery_mine: refineryMineFactor,
+            probe_replicate: probeBuildFactor,
+            factory_replicate: probeBuildFactor,
+            refinery_mine: probeMiningFactor,
             energy_generation: energyGenerationFactor
         };
     }

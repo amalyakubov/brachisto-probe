@@ -8,6 +8,7 @@
 class EnergyCalculator {
     constructor(orbitalMechanics) {
         this.orbitalMechanics = orbitalMechanics;
+        this.economicRules = null;
         
         // BASE energy costs per activity (watts per probe doing that activity)
         // These are reduced by skills and research upgrades
@@ -23,9 +24,100 @@ class EnergyCalculator {
     }
     
     /**
+     * Initialize with economic rules (for skill coefficients)
+     * @param {Object} economicRules - Economic rules from data loader
+     */
+    initializeEconomicRules(economicRules) {
+        this.economicRules = economicRules;
+    }
+    
+    /**
+     * Build skill values array from coefficients and skills
+     * @param {Object} coefficients - Skill coefficients { skillName: coefficient }
+     * @param {Object} skills - Current skills from research
+     * @returns {Array<number>} Array of (coefficient * skill) values
+     */
+    buildSkillValues(coefficients, skills) {
+        if (!coefficients) return [1.0];
+        
+        const values = [];
+        for (const [skillName, coefficient] of Object.entries(coefficients)) {
+            if (skillName === 'description') continue; // Skip description field
+            
+            // Map skill names to actual skill values
+            let skillValue = 1.0;
+            switch (skillName) {
+                case 'robotic':
+                    skillValue = skills.robotic || skills.manipulation || 1.0;
+                    break;
+                case 'computer':
+                    skillValue = skills.computer?.total || 1.0;
+                    break;
+                case 'solar_pv':
+                    skillValue = skills.solar_pv || skills.energy_collection || 1.0;
+                    break;
+                default:
+                    skillValue = skills[skillName] || 1.0;
+            }
+            
+            values.push(coefficient * skillValue);
+        }
+        
+        return values.length > 0 ? values : [1.0];
+    }
+    
+    /**
+     * Calculate tech tree upgrade factor using geometric mean
+     * Formula: F = G^alpha where G = (c1*s1 * c2*s2 * ... * cn*sn)^(1/n)
+     * @param {Array<number>} skillValues - Array of (skill * coefficient) values
+     * @param {number} alpha - Tech growth scale factor (default 0.75)
+     * @returns {number} Tech tree upgrade factor
+     */
+    calculateTechTreeUpgradeFactor(skillValues, alpha = 0.75) {
+        if (!skillValues || skillValues.length === 0) return 1.0;
+        
+        // Filter out zero/negative values (safety check)
+        const validValues = skillValues.filter(v => v > 0);
+        if (validValues.length === 0) return 1.0;
+        
+        // Calculate geometric mean: G = (v1 * v2 * ... * vn)^(1/n)
+        const product = validValues.reduce((prod, val) => prod * val, 1.0);
+        const geometricMean = Math.pow(product, 1.0 / validValues.length);
+        
+        // Calculate log(G)
+        const logG = Math.log(geometricMean);
+        
+        // F = exp(alpha * log(G)) = G^alpha
+        const factor = Math.exp(alpha * logG);
+        
+        return factor;
+    }
+    
+    /**
+     * Calculate upgrade factor from skill coefficients
+     * @param {string} category - Category name (e.g., 'probe_energy_production')
+     * @param {Object} skills - Current skills
+     * @param {number} alpha - Alpha factor (default from config)
+     * @returns {number} Upgrade factor
+     */
+    calculateUpgradeFactorFromCoefficients(category, skills, alpha = null) {
+        if (!this.economicRules || !this.economicRules.skill_coefficients) {
+            return 1.0;
+        }
+        
+        const coefficients = this.economicRules.skill_coefficients[category];
+        if (!coefficients) {
+            return 1.0;
+        }
+        
+        const skillValues = this.buildSkillValues(coefficients, skills);
+        const alphaFactor = alpha !== null ? alpha : (this.economicRules.alpha_factors?.probe_performance || 0.75);
+        return this.calculateTechTreeUpgradeFactor(skillValues, alphaFactor);
+    }
+    
+    /**
      * Calculate effective energy cost for an activity, reduced by skills
-     * Formula: effective_cost = base_cost / (skill1 * skill2 * ...)
-     * Skills > 1.0 reduce cost, skills < 1.0 increase cost
+     * Uses config-driven skill coefficients for probe energy consumption reduction
      * @param {number} baseCost - Base energy cost in watts
      * @param {Object} skills - Current skills object
      * @param {string} activityType - Type of activity (mining, recycle_slag)
@@ -35,30 +127,31 @@ class EnergyCalculator {
         // Start with base cost
         let effectiveCost = baseCost;
         
-        // Apply skill modifiers based on activity type
+        // Apply general probe energy consumption reduction from config
+        const consumptionReductionFactor = this.calculateUpgradeFactorFromCoefficients('probe_energy_consumption', skills);
+        effectiveCost /= consumptionReductionFactor;
+        
+        // Apply activity-specific modifiers (legacy support, can be removed if not needed)
         // Only mining and slag recycling have energy costs
         switch (activityType) {
             case 'mining':
-                // Mining efficiency reduces mining energy cost
+                // Mining efficiency also reduces mining energy cost
                 effectiveCost /= (skills.production || 1.0);
                 break;
                 
             case 'recycle_slag':
-                // Slag recycling uses recycling and materials skills
+                // Slag recycling also uses recycling and materials skills
                 effectiveCost /= (skills.recycling || 1.0);
                 effectiveCost /= (skills.materials || 1.0);
                 break;
         }
-        
-        // Energy transport skill applies to all activities (general efficiency)
-        effectiveCost /= (skills.energy_transport || 1.0);
         
         return effectiveCost;
     }
     
     /**
      * Calculate energy production from probes
-     * Each probe generates base energy production
+     * Each probe generates base energy production, multiplied by skill-based upgrade factors
      * @param {Object} probesByZone - Probes by zone
      * @param {Object} skills - Current skills (for potential upgrades)
      * @returns {number} Total energy production from probes in watts
@@ -66,16 +159,16 @@ class EnergyCalculator {
     calculateProbeEnergyProduction(probesByZone, skills) {
         let totalProduction = 0;
         
-        // Energy production skill can increase probe energy output
-        const productionMultiplier = skills.energy_collection || skills.solar_pv || 1.0;
+        // Use config-driven skill coefficients for probe energy production
+        const productionUpgradeFactor = this.calculateUpgradeFactorFromCoefficients('probe_energy_production', skills);
         
         for (const zoneId in probesByZone) {
             const zoneProbes = probesByZone[zoneId] || {};
             const totalProbes = zoneProbes['probe'] || 0;
             
             if (totalProbes > 0) {
-                // Each probe produces base energy, multiplied by skills
-                const probeProduction = totalProbes * this.BASE_ENERGY_PRODUCTION_PROBE * productionMultiplier;
+                // Each probe produces base energy, multiplied by skill-based upgrade factor
+                const probeProduction = totalProbes * this.BASE_ENERGY_PRODUCTION_PROBE * productionUpgradeFactor;
                 totalProduction += probeProduction;
             }
         }
@@ -126,9 +219,6 @@ class EnergyCalculator {
                     const geometricFactor = Math.pow(count, 2.1);
                     const effectiveProduction = basePowerW * geometricFactor * zoneEfficiency * perfFactor;
                     totalProduction += effectiveProduction;
-                    
-                    // Debug logging
-                    console.log(`[EnergyCalculator] Structure energy: ${buildingId} in ${zoneId}: ${count} structures, ${(effectiveProduction/1e6).toFixed(2)} MW (base: ${basePowerMW} MW, geometric: ${geometricFactor.toFixed(2)}x)`);
                 } else if (building.effects?.energy_production_per_second) {
                     // Legacy system fallback
                     const baseProduction = building.effects.energy_production_per_second;
@@ -140,10 +230,6 @@ class EnergyCalculator {
                     totalProduction += effectiveProduction;
                 }
             }
-        }
-        
-        if (totalProduction > 0) {
-            console.log(`[EnergyCalculator] Total structure energy production: ${(totalProduction/1e6).toFixed(2)} MW`);
         }
         
         // Dyson sphere energy production
@@ -273,11 +359,6 @@ class EnergyCalculator {
         const probeProduction = this.calculateProbeEnergyProduction(probesByZone, skills);
         const structureProduction = this.calculateStructureEnergyProduction(structuresByZone, buildings, state);
         const production = baseProduction + probeProduction + structureProduction + dysonEnergyProduction;
-        
-        // Debug logging for energy balance
-        if (structureProduction > 0) {
-            console.log(`[EnergyCalculator] Energy balance: base=${(baseProduction/1e6).toFixed(2)} MW, probes=${(probeProduction/1e6).toFixed(2)} MW, structures=${(structureProduction/1e6).toFixed(2)} MW, dyson=${(dysonEnergyProduction/1e6).toFixed(2)} MW, total=${(production/1e6).toFixed(2)} MW`);
-        }
         
         // Calculate consumption from probes (activity-based) + structures
         const probeConsumption = this.calculateProbeEnergyConsumption(probesByZone, probeAllocationsByZone, skills, state);

@@ -19,6 +19,7 @@ class GameDataLoader {
         this.orbitalZones = null;
         this.buildings = null;
         this.researchTrees = null;
+        this.economicRules = null;
         this.zoneMetalLimits = null;
         this.cache = {};
     }
@@ -80,6 +81,46 @@ class GameDataLoader {
             this.researchTrees = data.research_trees || {};
         }
         return this.researchTrees;
+    }
+
+    async loadEconomicRules() {
+        if (!this.economicRules) {
+            const response = await fetch('/game_data/economic_rules.json');
+            this.economicRules = await response.json();
+        }
+        return this.economicRules;
+    }
+
+    getEconomicRules() {
+        return this.economicRules;
+    }
+
+    getSkillCoefficients(category) {
+        if (!this.economicRules || !this.economicRules.skill_coefficients) {
+            return null;
+        }
+        return this.economicRules.skill_coefficients[category] || null;
+    }
+
+    getAlphaFactors() {
+        if (!this.economicRules) {
+            return { structure_performance: 0.8, probe_performance: 0.75, dyson_performance: 0.55, cost_scaling: 0.25 };
+        }
+        return this.economicRules.alpha_factors;
+    }
+
+    getProbeBaseRates() {
+        if (!this.economicRules) {
+            return { mass_kg: 100, base_mining_rate_kg_per_day: 100, base_build_rate_kg_per_day: 20 };
+        }
+        return this.economicRules.probe;
+    }
+
+    getCrowdingParams() {
+        if (!this.economicRules) {
+            return { threshold_ratio: 0.01, decay_rate: 4.395 };
+        }
+        return this.economicRules.crowding;
     }
 
     getZoneById(zoneId) {
@@ -191,7 +232,8 @@ class GameDataLoader {
         await Promise.all([
             this.loadOrbitalMechanics(),
             this.loadBuildings(),
-            this.loadResearchTrees()
+            this.loadResearchTrees(),
+            this.loadEconomicRules()
         ]);
     }
 }

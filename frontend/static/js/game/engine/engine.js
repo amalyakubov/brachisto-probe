@@ -47,6 +47,7 @@ class GameEngine {
         this.buildings = null;
         this.researchTrees = null;
         this.researchCategories = null; // Categories structure for TechTree
+        this.economicRules = null; // Economic rules for balancing
         
         // Initialize state
         this.initialized = false;
@@ -67,10 +68,21 @@ class GameEngine {
         this.researchTrees = researchData.trees;
         this.researchCategories = researchData.categories;
         
+        // Load economic rules for balancing
+        this.economicRules = await this.loadEconomicRules();
+        
         // Initialize calculators with data
         this.orbitalMechanics.initialize(this.orbitalZones);
         this.skillsCalculator.initialize(this.researchTrees);
         this.researchCalculator.initialize(this.researchTrees);
+        
+        // Initialize production calculator with economic rules
+        if (this.economicRules) {
+            this.productionCalculator.initializeEconomicRules(this.economicRules);
+            this.orbitalMechanics.initializeEconomicRules(this.economicRules);
+            this.transferSystem.initializeEconomicRules(this.economicRules);
+            this.energyCalculator.initializeEconomicRules(this.economicRules);
+        }
         
         // Initialize TechTree with categories data
         if (this.techTree) {
@@ -92,6 +104,10 @@ class GameEngine {
             (typeof self !== 'undefined' && self.CompositeSkillsCalculator ? self.CompositeSkillsCalculator : null);
         if (CompositeSkillsCalc) {
             this.compositeSkillsCalculator = new CompositeSkillsCalc(this.orbitalMechanics);
+            // Initialize with economic rules
+            if (this.economicRules) {
+                this.compositeSkillsCalculator.initializeEconomicRules(this.economicRules);
+            }
         }
         
         // Initialize recycling system (needs compositeSkillsCalculator)
@@ -127,6 +143,21 @@ class GameEngine {
         } catch (error) {
             console.error('Failed to load research data:', error);
             return { trees: {}, categories: null };
+        }
+    }
+    
+    /**
+     * Load economic rules for game balancing
+     * @returns {Object} Economic rules
+     */
+    async loadEconomicRules() {
+        try {
+            const response = await fetch('/game_data/economic_rules.json');
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            console.warn('Failed to load economic rules, using defaults:', error);
+            return null;
         }
     }
     
@@ -326,11 +357,12 @@ class GameEngine {
         }
         this.state.skills = skills;
         
-        // 2. Get alpha factors from config (will be used after research update)
-        const ALPHA_STRUCTURE_FACTOR = Config.ALPHA_STRUCTURE_FACTOR || 0.8;
-        const ALPHA_PROBE_FACTOR = Config.ALPHA_PROBE_FACTOR || 0.75;
-        const ALPHA_DYSON_FACTOR = Config.ALPHA_DYSON_FACTOR || 0.55;
-        const ALPHA_COST_FACTOR = Config.ALPHA_COST_FACTOR || 0.25;
+        // 2. Get alpha factors from economic rules (with Config fallback)
+        const alphaFactors = this.economicRules?.alpha_factors || {};
+        const ALPHA_STRUCTURE_FACTOR = alphaFactors.structure_performance || Config.ALPHA_STRUCTURE_FACTOR || 0.8;
+        const ALPHA_PROBE_FACTOR = alphaFactors.probe_performance || Config.ALPHA_PROBE_FACTOR || 0.75;
+        const ALPHA_DYSON_FACTOR = alphaFactors.dyson_performance || Config.ALPHA_DYSON_FACTOR || 0.55;
+        const ALPHA_COST_FACTOR = alphaFactors.cost_scaling || Config.ALPHA_COST_FACTOR || 0.25;
         
         // 3. Update research progress (consumes intelligence)
         // Use TechTree if available, otherwise fall back to ResearchCalculator
@@ -536,80 +568,16 @@ class GameEngine {
         const researchAllocationInfo = {};
         
         for (const project of enabledProjects) {
-            const { treeId, tierId, tierDef } = project;
+            const { treeId, tierId } = project;
             
-            // Calculate tier cost in EFLOPS-days (same logic as TechTree)
-            const EFLOPS_TO_FLOPS = 1e18;
-            const SECONDS_PER_DAY = 86400;
-            const totalTranches = tierDef.tranches || 10;
-            
-            let tierCostEFLOPSDays;
-            if (tierDef.tier_cost_eflops_days !== undefined) {
-                tierCostEFLOPSDays = tierDef.tier_cost_eflops_days;
-            } else if (tierDef.tranche_cost_intelligence !== undefined) {
-                // Legacy: convert per-tranche cost to total tier cost
-                const legacyCost = tierDef.tranche_cost_intelligence;
-                const legacyCostEFLOPSDays = legacyCost / (EFLOPS_TO_FLOPS * SECONDS_PER_DAY);
-                if (legacyCostEFLOPSDays < 1000) {
-                    tierCostEFLOPSDays = legacyCostEFLOPSDays * totalTranches;
-                } else {
-                    tierCostEFLOPSDays = legacyCostEFLOPSDays;
-                }
-            } else {
-                // Default: tier 1 costs 10,000 EFLOPS-days, scale exponentially
-                const tree = this.techTree.getTree(treeId);
-                let tierIndex = 0;
-                if (tree && tree.tiers) {
-                    const foundIndex = tree.tiers.findIndex(t => t.id === tierId);
-                    if (foundIndex >= 0) {
-                        tierIndex = foundIndex;
-                    }
-                } else if (tree && tree.subcategories && tierId.includes('_')) {
-                    // Handle subcategory tiers (format: "subcatId_tierId")
-                    const parts = tierId.split('_');
-                    if (parts.length >= 2) {
-                        const subcatId = parts[0];
-                        const actualTierId = parts.slice(1).join('_');
-                        const subcatData = tree.subcategories[subcatId];
-                        if (subcatData && subcatData.tiers) {
-                            const foundIndex = subcatData.tiers.findIndex(t => t.id === actualTierId);
-                            if (foundIndex >= 0) {
-                                tierIndex = foundIndex;
-                            }
-                        }
-                    }
-                }
-                const baseCostEFLOPSDays = 10000; // Tier 1 base cost
-                tierCostEFLOPSDays = baseCostEFLOPSDays * Math.pow(10, tierIndex);
-            }
-            
-            // Apply tier-based throttling: max research rate scales with tier cost
-            // Higher tiers have exponentially higher costs, so they can research faster proportionally
-            // Formula: maxEFLOPSDaysPerDay = baseRate * (cost / baseCost)^0.4
-            // This means a tier that costs 100x more can research at ~6.3x the rate
-            const baseCostEFLOPSDays = 10000; // Base cost for tier 1
-            const costRatio = tierCostEFLOPSDays / baseCostEFLOPSDays;
-            
-            // Max EFLOPS-days per day multiplier: cost ratio to the 0.4 power (so higher tiers research faster)
-            // Cap at 100x to prevent extreme values
-            const maxRateMultiplier = Math.min(100, Math.pow(costRatio, 0.4));
-            
-            // Base max rate: can complete tier 1 (10,000 EFLOPS-days) in 1 day = 10,000 EFLOPS-days/day
-            // Higher tiers can complete proportionally faster
-            const maxEFLOPSDaysPerDay = baseCostEFLOPSDays * maxRateMultiplier;
-            const maxFlopsPerDay = maxEFLOPSDaysPerDay * EFLOPS_TO_FLOPS * SECONDS_PER_DAY;
-            
-            // Throttle the allocated FLOPS to not exceed max rate
-            const maxFlopsThisTick = (maxFlopsPerDay * deltaTime);
-            const throttledFlops = Math.min(flopsPerProject, maxFlopsThisTick);
-            
+            // No throttling - research progresses at full allocated rate
             // Store allocation info for UI
             if (!researchAllocationInfo[treeId]) {
                 researchAllocationInfo[treeId] = {};
             }
-            researchAllocationInfo[treeId][tierId] = throttledFlops / deltaTime; // FLOPS per second
+            researchAllocationInfo[treeId][tierId] = flopsPerProject / deltaTime; // FLOPS per second
             
-            this.techTree.addResearchProgress(treeId, tierId, throttledFlops, this.state.time);
+            this.techTree.addResearchProgress(treeId, tierId, flopsPerProject, this.state.time);
         }
         
         // Store research allocation info in state for UI

@@ -511,30 +511,48 @@ class TransferVisualization {
     }
     
     /**
-     * Create cargo icon for a transfer
-     * Metal transfers use silver squares, probes use spheres
+     * Create cargo icon(s) for a transfer
+     * Metal transfers use 5 silver squares spread along the trajectory
+     * Probes use a single sphere
      */
     createCargoDot(resourceType) {
         const color = this.colors[resourceType] || this.colors.probe;
         
-        let geometry;
         if (resourceType === 'metal') {
-            // Create a square for metal transfers
+            // Create 5 squares for metal transfers (spread along trajectory)
+            const dots = [];
             const size = 0.06;
-            geometry = new THREE.BoxGeometry(size, size, size);
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.5
+            });
+            
+            for (let i = 0; i < 5; i++) {
+                const dot = new THREE.Mesh(geometry.clone(), material.clone());
+                dots.push(dot);
+            }
+            return dots;
         } else {
-            // Create a sphere for probe transfers
-            geometry = new THREE.SphereGeometry(0.05, 8, 8);
+            // Create a single sphere for probe transfers
+            const geometry = new THREE.SphereGeometry(0.05, 8, 8);
+            const material = new THREE.MeshBasicMaterial({
+                color: color,
+                emissive: color,
+                emissiveIntensity: 0.5
+            });
+            
+            const icon = new THREE.Mesh(geometry, material);
+            return icon;
         }
-        
-        const material = new THREE.MeshBasicMaterial({
-            color: color,
-            emissive: color,
-            emissiveIntensity: 0.5
-        });
-        
-        const icon = new THREE.Mesh(geometry, material);
-        return icon;
+    }
+    
+    /**
+     * Check if cargo is an array of dots (metal) or single dot (probe)
+     */
+    isMultiDot(dot) {
+        return Array.isArray(dot);
     }
     
     /**
@@ -601,7 +619,14 @@ class TransferVisualization {
         const dot = this.createCargoDot(resourceType);
         
         this.scene.add(ellipseData.line);
-        this.scene.add(dot);
+        // Add dot(s) to scene - handle both single dot and array of dots
+        if (this.isMultiDot(dot)) {
+            for (const d of dot) {
+                this.scene.add(d);
+            }
+        } else {
+            this.scene.add(dot);
+        }
         
         const arrivalTime = departureTime + transferTime;
         
@@ -619,7 +644,8 @@ class TransferVisualization {
             batchId: batchId,
             transferId: transfer.id,
             departureTime: departureTime,
-            arrivalTime: arrivalTime
+            arrivalTime: arrivalTime,
+            resourceType: resourceType
         };
         
         this.continuousBatches.set(batchId, batchViz);
@@ -640,9 +666,18 @@ class TransferVisualization {
         }
         
         if (batchViz.dot) {
-            this.scene.remove(batchViz.dot);
-            batchViz.dot.geometry.dispose();
-            batchViz.dot.material.dispose();
+            // Handle both single dot and array of dots
+            if (this.isMultiDot(batchViz.dot)) {
+                for (const d of batchViz.dot) {
+                    this.scene.remove(d);
+                    d.geometry.dispose();
+                    d.material.dispose();
+                }
+            } else {
+                this.scene.remove(batchViz.dot);
+                batchViz.dot.geometry.dispose();
+                batchViz.dot.material.dispose();
+            }
         }
         
         this.continuousBatches.delete(batchId);
@@ -733,20 +768,46 @@ class TransferVisualization {
                             // Visualization completed, remove it
                             this.removeBatch(batchId);
                         } else {
-                            // Update dot position along fixed trajectory
-                            const position = this.calculatePositionOnEllipse(
-                                batchViz.params,
-                                batchViz.fromAngle,
-                                batchViz.toAngle,
-                                batchViz.transferAngle,
-                                batchViz.fromAU,
-                                batchViz.toAU,
-                                progress,
-                                batchViz.fromZoneId,
-                                batchViz.toZoneId
-                            );
-                            batchViz.dot.position.copy(position);
-                            batchViz.dot.visible = true;
+                            // Update dot position(s) along fixed trajectory
+                            if (this.isMultiDot(batchViz.dot)) {
+                                // Metal transfer: spread 5 dots along the trajectory
+                                const spacing = 0.03; // 3% spacing between dots (closer together)
+                                for (let i = 0; i < batchViz.dot.length; i++) {
+                                    // Lead dot at full progress, trailing dots behind
+                                    const dotProgress = progress - (i * spacing);
+                                    if (dotProgress >= 0 && dotProgress <= 1) {
+                                        const position = this.calculatePositionOnEllipse(
+                                            batchViz.params,
+                                            batchViz.fromAngle,
+                                            batchViz.toAngle,
+                                            batchViz.transferAngle,
+                                            batchViz.fromAU,
+                                            batchViz.toAU,
+                                            dotProgress,
+                                            batchViz.fromZoneId,
+                                            batchViz.toZoneId
+                                        );
+                                        batchViz.dot[i].position.copy(position);
+                                        batchViz.dot[i].visible = true;
+                                    } else {
+                                        batchViz.dot[i].visible = false;
+                                    }
+                                }
+                            } else {
+                                const position = this.calculatePositionOnEllipse(
+                                    batchViz.params,
+                                    batchViz.fromAngle,
+                                    batchViz.toAngle,
+                                    batchViz.transferAngle,
+                                    batchViz.fromAU,
+                                    batchViz.toAU,
+                                    progress,
+                                    batchViz.fromZoneId,
+                                    batchViz.toZoneId
+                                );
+                                batchViz.dot.position.copy(position);
+                                batchViz.dot.visible = true;
+                            }
                         }
                     }
                 }
@@ -773,7 +834,14 @@ class TransferVisualization {
                     const dot = this.createCargoDot(resourceType);
                     
                     this.scene.add(ellipseData.line);
-                    this.scene.add(dot);
+                    // Add dot(s) to scene - handle both single dot and array of dots
+                    if (this.isMultiDot(dot)) {
+                        for (const d of dot) {
+                            this.scene.add(d);
+                        }
+                    } else {
+                        this.scene.add(dot);
+                    }
                     
                     transferViz = {
                         ellipse: ellipseData.line,
@@ -786,7 +854,8 @@ class TransferVisualization {
                         fromZoneId: fromZoneId, // Store for visual position calculation
                         toZoneId: toZoneId, // Store for visual radius calculation
                         dot: dot,
-                        transferId: transferId
+                        transferId: transferId,
+                        resourceType: resourceType
                     };
                     
                     this.transfers.set(transferId, transferViz);
@@ -795,25 +864,50 @@ class TransferVisualization {
                 // Calculate progress
                 const progress = this.calculateProgress(transfer, currentTime);
                 
-                // Update dot position along fixed trajectory
-                const position = this.calculatePositionOnEllipse(
-                    transferViz.params,
-                    transferViz.fromAngle,
-                    transferViz.toAngle,
-                    transferViz.transferAngle,
-                    transferViz.fromAU,
-                    transferViz.toAU,
-                    progress,
-                    transferViz.fromZoneId,
-                    transferViz.toZoneId
-                );
-                transferViz.dot.position.copy(position);
+                // Update dot position(s) along fixed trajectory
+                if (this.isMultiDot(transferViz.dot)) {
+                    // Metal transfer: spread 5 dots along the trajectory
+                    const spacing = 0.03; // 3% spacing between dots (closer together)
+                    for (let i = 0; i < transferViz.dot.length; i++) {
+                        // Lead dot at full progress, trailing dots behind
+                        const dotProgress = progress - (i * spacing);
+                        if (dotProgress >= 0 && dotProgress <= 1) {
+                            const position = this.calculatePositionOnEllipse(
+                                transferViz.params,
+                                transferViz.fromAngle,
+                                transferViz.toAngle,
+                                transferViz.transferAngle,
+                                transferViz.fromAU,
+                                transferViz.toAU,
+                                dotProgress,
+                                transferViz.fromZoneId,
+                                transferViz.toZoneId
+                            );
+                            transferViz.dot[i].position.copy(position);
+                            transferViz.dot[i].visible = true;
+                        } else {
+                            transferViz.dot[i].visible = false;
+                        }
+                    }
+                } else {
+                    const position = this.calculatePositionOnEllipse(
+                        transferViz.params,
+                        transferViz.fromAngle,
+                        transferViz.toAngle,
+                        transferViz.transferAngle,
+                        transferViz.fromAU,
+                        transferViz.toAU,
+                        progress,
+                        transferViz.fromZoneId,
+                        transferViz.toZoneId
+                    );
+                    transferViz.dot.position.copy(position);
+                    transferViz.dot.visible = true;
+                }
                 
                 // Remove visualization when transfer completes
                 if (progress >= 1.0) {
                     this.removeTransfer(transferId);
-                } else {
-                    transferViz.dot.visible = true;
                 }
             }
         }
@@ -854,9 +948,18 @@ class TransferVisualization {
         }
         
         if (transferViz.dot) {
-            this.scene.remove(transferViz.dot);
-            transferViz.dot.geometry.dispose();
-            transferViz.dot.material.dispose();
+            // Handle both single dot and array of dots
+            if (this.isMultiDot(transferViz.dot)) {
+                for (const d of transferViz.dot) {
+                    this.scene.remove(d);
+                    d.geometry.dispose();
+                    d.material.dispose();
+                }
+            } else {
+                this.scene.remove(transferViz.dot);
+                transferViz.dot.geometry.dispose();
+                transferViz.dot.material.dispose();
+            }
         }
         
         this.transfers.delete(transferId);

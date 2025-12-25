@@ -318,7 +318,13 @@ class StructureSystem {
                     // Metal requirement met - check minimum build time
                     const startTime = structureStartTimes[enabledKey] || currentTime;
                     const elapsedTime = currentTime - startTime;
-                    const minBuildTime = (buildingId === 'mass_driver') ? 1000 : 10; // days
+                    // Minimum build times per structure type (in days)
+                    let minBuildTime = 3; // default for other structures
+                    if (buildingId === 'mass_driver') {
+                        minBuildTime = 10; // Mass drivers: 100 days minimum
+                    } else if (buildingId === 'power_station' || buildingId === 'data_center') {
+                        minBuildTime = 2; // Power stations and Orbital Data Centers: 2 days minimum
+                    }
                     
                     if (elapsedTime >= minBuildTime) {
                         // Both metal and time requirements met - building is complete

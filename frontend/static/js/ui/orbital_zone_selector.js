@@ -10,6 +10,9 @@ class OrbitalZoneSelector {
         this.currentTransferDialog = null; // Reference to open transfer dialog
         this.transferArcs = []; // Active transfer arcs: [{from, to, type, count, rate, ...}]
         
+        // Quick transfer mode: 'probe' for spacebar (1 probe one-time), 'metal' for shift+space (10% metal continuous)
+        this.quickTransferMode = null;
+        
         // Performance optimization: Throttle probe visualization updates
         this.probeUpdateFrameCount = 0; // Frame counter for probe UI updates
         this.lastProbeCounts = null; // Cache last probe counts to detect changes
@@ -79,19 +82,63 @@ class OrbitalZoneSelector {
                 return;
             }
             
-            // Handle spacebar to open transfer dialog
+            // Handle spacebar for quick transfers
             // Only handle if a zone is selected (otherwise let pause/resume handle it)
             if ((e.key === ' ' || e.key === 'Spacebar') && this.selectedZone) {
                 e.preventDefault();
                 e.stopPropagation();
-                // If transfer dialog is already open, close it
+                
+                // Close any open transfer dialog first
                 if (this.currentTransferDialog) {
                     this.closeTransferDialog();
-                } else {
-                    // Open transfer dialog with selected zone as source
-                    // Destination will be set when user selects another zone
-                    this.showTransferDialog(this.selectedZone, null);
                 }
+                
+                // Check for shift+space: mass driver transfer (continuous metal at 10%)
+                if (e.shiftKey) {
+                    // Check if source zone has mass driver
+                    const structuresByZone = this.gameState?.structures_by_zone || {};
+                    const zoneStructures = structuresByZone[this.selectedZone] || {};
+                    const hasMassDriver = (zoneStructures['mass_driver'] || 0) > 0;
+                    
+                    if (!hasMassDriver) {
+                        // Show brief message that mass driver is required
+                        this.showQuickMessage('Mass Driver required for metal transfers');
+                        return;
+                    }
+                    
+                    // Set quick transfer mode to metal (continuous, 10%)
+                    this.quickTransferMode = 'metal';
+                    this.transferSourceZone = this.selectedZone;
+                    this.waitingForTransferDestination = true;
+                    this.showQuickMessage('Metal transfer: select destination (10% continuous) - travel times shown');
+                } else {
+                    // Space without shift: probe transfer (one-time, 1 probe)
+                    // Check if source zone has probes
+                    let availableProbes = 0;
+                    if (this.gameState && this.gameState.probes_by_zone) {
+                        const zoneProbes = this.gameState.probes_by_zone[this.selectedZone] || {};
+                        availableProbes = zoneProbes['probe'] || 0;
+                    }
+                    
+                    if (availableProbes < 1) {
+                        this.showQuickMessage('No probes available for transfer');
+                        return;
+                    }
+                    
+                    // Set quick transfer mode to probe (one-time, 1 probe)
+                    this.quickTransferMode = 'probe';
+                    this.transferSourceZone = this.selectedZone;
+                    this.waitingForTransferDestination = true;
+                    this.showQuickMessage('Probe transfer: select destination (1 probe) - travel times shown');
+                }
+                
+                this.render(); // Re-render to show transfer source highlight
+                return;
+            }
+            
+            // Escape to cancel quick transfer mode
+            if (e.key === 'Escape' && this.quickTransferMode) {
+                this.cancelQuickTransfer();
                 return;
             }
             
@@ -275,18 +322,20 @@ class OrbitalZoneSelector {
         // Render floating planet squares above the menu
         html += `<div class="orbital-zone-planet-squares" style="width: ${totalTilesWidthWithGaps}px;">`;
         
-        // Check if transfer dialog is open - if so, calculate travel times
+        // Check if transfer dialog is open or quick transfer mode is active - if so, calculate travel times
         const isTransferDialogOpen = this.currentTransferDialog !== null;
+        const isQuickTransferMode = this.quickTransferMode !== null;
+        const showTravelTimes = isTransferDialogOpen || isQuickTransferMode;
         const transferSourceZone = this.transferSourceZone;
         let transferSourceZoneData = null;
-        if (isTransferDialogOpen && transferSourceZone) {
+        if (showTravelTimes && transferSourceZone) {
             transferSourceZoneData = this.orbitalZones.find(z => z.id === transferSourceZone);
         }
         
-        // Check for mass driver boost if transfer dialog is open
+        // Check for mass driver boost if transfer dialog is open or in metal transfer mode
         let massDriverCount = 0;
         let hasMassDriver = false;
-        if (isTransferDialogOpen && transferSourceZone && this.gameState) {
+        if (showTravelTimes && transferSourceZone && this.gameState) {
             const structuresByZone = this.gameState.structures_by_zone || {};
             const zoneStructures = structuresByZone[transferSourceZone] || {};
             massDriverCount = zoneStructures['mass_driver'] || 0;
@@ -309,13 +358,29 @@ class OrbitalZoneSelector {
             const tileCenter = (index * (tileWidth + tileGap)) + (tileWidth / 2);
             const tileLeft = tileCenter - (totalTilesWidthWithGaps / 2);
             
-            // Calculate travel time if transfer dialog is open
+            // Calculate travel time if transfer dialog is open or in quick transfer mode
             let travelTimeDisplay = '';
-            if (isTransferDialogOpen && transferSourceZoneData && transferSourceZone !== zone.id) {
-                let transferTime = this.calculateTransferTime(transferSourceZoneData, zone);
+            if (showTravelTimes && transferSourceZoneData && transferSourceZone !== zone.id) {
+                let transferTime;
                 
-                // Apply mass driver speed multiplier if available
-                if (hasMassDriver && window.gameEngine && window.gameEngine.transferSystem) {
+                // Use skill-based calculation if available
+                if (window.gameEngine && window.gameEngine.orbitalMechanics) {
+                    const skills = this.gameState?.skills || {};
+                    transferTime = window.gameEngine.orbitalMechanics.calculateTransferTime(
+                        transferSourceZone, 
+                        zone.id, 
+                        skills
+                    );
+                } else {
+                    // Fallback to local calculation
+                    transferTime = this.calculateTransferTime(transferSourceZoneData, zone);
+                }
+                
+                // For metal transfers (shift+space), apply mass driver speed multiplier
+                const isMetalTransfer = this.quickTransferMode === 'metal' || 
+                    (isTransferDialogOpen && this.currentTransferDialog?.querySelector?.('input[name="resource-type"]:checked')?.value === 'metal');
+                
+                if (isMetalTransfer && hasMassDriver && window.gameEngine && window.gameEngine.transferSystem) {
                     const speedMultiplier = window.gameEngine.transferSystem.calculateMassDriverSpeedMultiplier(massDriverCount);
                     transferTime = transferTime * speedMultiplier;
                 }
@@ -334,9 +399,10 @@ class OrbitalZoneSelector {
                          <!-- Probe dots container removed for performance -->
                      </div>`;
             
-            // Display travel time below square if transfer dialog is open
+            // Display travel time below square if transfer dialog is open or in quick transfer mode
             if (travelTimeDisplay) {
-                html += `<div class="orbital-zone-travel-time" data-zone="${zone.id}">${travelTimeDisplay}</div>`;
+                const transferModeClass = this.quickTransferMode === 'metal' ? 'metal-transfer' : 'probe-transfer';
+                html += `<div class="orbital-zone-travel-time ${transferModeClass}" data-zone="${zone.id}">${travelTimeDisplay}</div>`;
             }
             
             html += `</div>`;
@@ -1085,6 +1151,31 @@ class OrbitalZoneSelector {
     }
 
     async selectZone(zoneId) {
+        // Handle quick transfer mode (spacebar or shift+spacebar initiated)
+        if (this.quickTransferMode && this.transferSourceZone && this.transferSourceZone !== zoneId) {
+            // Execute the quick transfer to this destination
+            this.selectedZone = zoneId;
+            this.executeQuickTransfer(zoneId);
+            
+            // Notify panels of selection change
+            if (window.purchasePanel) {
+                window.purchasePanel.setSelectedZone(zoneId);
+            }
+            if (window.commandPanel) {
+                window.commandPanel.setSelectedZone(zoneId);
+            }
+            if (window.zoneInfoPanel) {
+                window.zoneInfoPanel.setSelectedZone(zoneId);
+            }
+            return;
+        }
+        
+        // If in quick transfer mode and same zone selected, cancel it
+        if (this.quickTransferMode && this.transferSourceZone === zoneId) {
+            this.cancelQuickTransfer();
+            return;
+        }
+        
         // If a transfer dialog is open and a different zone is selected, send the transfer
         if (this.currentTransferDialog && this.transferSourceZone && this.transferSourceZone !== zoneId) {
             // Update dialog with destination zone first
@@ -1168,7 +1259,105 @@ class OrbitalZoneSelector {
         // Clear transfer source and waiting state
         this.transferSourceZone = null;
         this.waitingForTransferDestination = false;
+        this.quickTransferMode = null;
         this.render();
+    }
+    
+    /**
+     * Cancel quick transfer mode (escape key)
+     */
+    cancelQuickTransfer() {
+        this.quickTransferMode = null;
+        this.transferSourceZone = null;
+        this.waitingForTransferDestination = false;
+        this.hideQuickMessage();
+        this.render();
+    }
+    
+    /**
+     * Show a quick message overlay
+     */
+    showQuickMessage(message) {
+        // Remove existing message
+        this.hideQuickMessage();
+        
+        const msgEl = document.createElement('div');
+        msgEl.id = 'quick-transfer-message';
+        msgEl.style.cssText = `
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: #4a9eff;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+            z-index: 1000;
+            border: 1px solid rgba(74, 158, 255, 0.4);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        `;
+        msgEl.textContent = message;
+        document.body.appendChild(msgEl);
+        
+        // Auto-hide after 3 seconds if still in quick transfer mode, otherwise hide immediately on execution
+        this.quickMessageTimeout = setTimeout(() => {
+            this.hideQuickMessage();
+        }, 3000);
+    }
+    
+    /**
+     * Hide quick message overlay
+     */
+    hideQuickMessage() {
+        if (this.quickMessageTimeout) {
+            clearTimeout(this.quickMessageTimeout);
+            this.quickMessageTimeout = null;
+        }
+        const existing = document.getElementById('quick-transfer-message');
+        if (existing) {
+            existing.remove();
+        }
+    }
+    
+    /**
+     * Execute a quick transfer (called when destination is selected in quick mode)
+     */
+    executeQuickTransfer(toZoneId) {
+        const fromZoneId = this.transferSourceZone;
+        const mode = this.quickTransferMode;
+        
+        if (!fromZoneId || !mode || fromZoneId === toZoneId) {
+            this.cancelQuickTransfer();
+            return;
+        }
+        
+        if (mode === 'probe') {
+            // One-time transfer of 1 probe
+            this.createTransfer(fromZoneId, toZoneId, 'probe', 'one-time', 1, 0);
+            this.showQuickMessage(`Transferring 1 probe to ${this.getZoneName(toZoneId)}`);
+        } else if (mode === 'metal') {
+            // Continuous transfer of 10% stored metal
+            this.createTransfer(fromZoneId, toZoneId, 'metal', 'continuous', 0, 10);
+            this.showQuickMessage(`Metal transfer to ${this.getZoneName(toZoneId)} started (10%)`);
+        }
+        
+        // Clear quick transfer mode
+        this.quickTransferMode = null;
+        this.transferSourceZone = null;
+        this.waitingForTransferDestination = false;
+        this.render();
+    }
+    
+    /**
+     * Get zone display name
+     */
+    getZoneName(zoneId) {
+        if (!this.orbitalZones) return zoneId;
+        const zone = this.orbitalZones.find(z => z.id === zoneId);
+        return zone ? zone.name.replace(/\s+Orbit\s*$/i, '') : zoneId;
     }
     
     deselectZone() {
@@ -1241,7 +1430,7 @@ class OrbitalZoneSelector {
             }
         }
         
-        // Create dialog with tabs
+        // Create dialog with unified resource/transfer type selection
         const dialog = document.createElement('div');
         dialog.className = 'transfer-dialog';
         dialog.innerHTML = `
@@ -1249,12 +1438,6 @@ class OrbitalZoneSelector {
                 <div class="transfer-dialog-header">
                     <h3>Transfer</h3>
                     <button class="transfer-dialog-close">&times;</button>
-                </div>
-                <div class="transfer-tabs">
-                    <button class="transfer-tab active" data-tab="probes">Send Probes</button>
-                    <button class="transfer-tab ${hasMassDriver ? '' : 'disabled'}" data-tab="metal" ${hasMassDriver ? '' : 'disabled'}>
-                        Send Metal ${hasMassDriver ? '' : '(Requires Mass Driver)'}
-                    </button>
                 </div>
                 <div class="transfer-dialog-body">
                     <div class="transfer-route">
@@ -1264,84 +1447,91 @@ class OrbitalZoneSelector {
                     </div>
                     <div class="transfer-info">
                         <div class="transfer-info-item">
-                            <span class="transfer-label">Delta-V:</span>
-                            <span class="transfer-value">${toZone ? deltaV.toFixed(2) + ' km/s' : '—'}</span>
-                        </div>
-                        <div class="transfer-info-item">
                             <span class="transfer-label">Transfer Time:</span>
                             <span class="transfer-value" id="transfer-time">${toZone ? '—' : 'Select destination zone'}</span>
                         </div>
-                        <div class="transfer-info-item" id="transfer-probe-info">
-                            <span class="transfer-label">Available Probes:</span>
-                            <span class="transfer-value">${this.formatNumber(availableProbes)}</span>
-                        </div>
-                        <div class="transfer-info-item" id="transfer-metal-info" style="display: none;">
-                            <span class="transfer-label">Available Metal:</span>
-                            <span class="transfer-value">${this.formatNumber(availableMetal)} kg</span>
-                        </div>
-                        <div class="transfer-info-item" id="transfer-capacity-info" style="display: none;">
-                            <span class="transfer-label">Transfer Capacity:</span>
-                            <span class="transfer-value">${this.formatNumber(metalCapacity)} kg/day</span>
+                        <div class="transfer-info-item" id="transfer-available-info">
+                            <span class="transfer-label">Available:</span>
+                            <span class="transfer-value" id="transfer-available-value">${this.formatNumber(availableProbes)} probes</span>
                         </div>
                     </div>
-                    <!-- Probe Transfer Tab -->
-                    <div class="transfer-tab-content active" id="transfer-tab-probes">
-                        <div class="transfer-options">
-                            <div class="transfer-option">
-                                <label>
-                                    <input type="radio" name="transfer-type-probes" value="continuous">
-                                    Continuous Transfer
-                                </label>
-                                <input type="number" id="transfer-rate-probes" min="0.01" max="100" step="0.1" value="10" 
-                                       placeholder="% of probe production">
+                    
+                    <!-- Resource Type Selection -->
+                    <div class="transfer-section">
+                        <div class="transfer-section-label">Resource Type</div>
+                        <div class="transfer-radio-group">
+                            <label class="transfer-radio-label">
+                                <input type="radio" name="resource-type" value="probe" checked>
+                                <span class="transfer-radio-text">Probes</span>
+                            </label>
+                            <label class="transfer-radio-label ${hasMassDriver ? '' : 'disabled'}">
+                                <input type="radio" name="resource-type" value="metal" ${hasMassDriver ? '' : 'disabled'}>
+                                <span class="transfer-radio-text">Metal ${hasMassDriver ? '' : '(Requires Mass Driver)'}</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Transfer Mode Selection -->
+                    <div class="transfer-section">
+                        <div class="transfer-section-label">Transfer Mode</div>
+                        <div class="transfer-radio-group">
+                            <label class="transfer-radio-label">
+                                <input type="radio" name="transfer-mode" value="continuous">
+                                <span class="transfer-radio-text">Continuous</span>
+                            </label>
+                            <label class="transfer-radio-label">
+                                <input type="radio" name="transfer-mode" value="one-time" checked>
+                                <span class="transfer-radio-text">One-Time</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Transfer Amount Input -->
+                    <div class="transfer-section" id="transfer-amount-section">
+                        <!-- Continuous Probe: Rate input -->
+                        <div class="transfer-amount-input" id="input-probe-continuous" style="display: none;">
+                            <div class="transfer-section-label">Transfer Rate</div>
+                            <div class="transfer-input-row">
+                                <input type="number" id="transfer-rate-probes" min="0.01" max="100" step="0.1" value="10">
+                                <span class="transfer-input-unit">% of production</span>
                             </div>
-                            <div class="transfer-option">
-                                <label>
-                                    <input type="radio" name="transfer-type-probes" value="one-time" checked>
-                                    One-Time Transfer
-                                </label>
-                                <div class="transfer-slider-container">
-                                    <input type="range" id="transfer-count-slider" min="0" max="100" value="0" step="1">
-                                    <div class="transfer-slider-labels">
-                                        <span>1</span>
-                                        <span id="transfer-count-display">1</span>
-                                        <span>${availableProbes}</span>
-                                    </div>
-                                    <input type="hidden" id="transfer-count" value="1">
+                        </div>
+                        
+                        <!-- One-Time Probe: Slider -->
+                        <div class="transfer-amount-input" id="input-probe-onetime">
+                            <div class="transfer-section-label">Probe Count</div>
+                            <div class="transfer-slider-container">
+                                <input type="range" id="transfer-count-slider" min="0" max="100" value="0" step="1">
+                                <div class="transfer-slider-labels">
+                                    <span>1</span>
+                                    <span id="transfer-count-display">1</span>
+                                    <span>${availableProbes}</span>
                                 </div>
+                                <input type="hidden" id="transfer-count" value="1">
                             </div>
+                        </div>
+                        
+                        <!-- Continuous Metal: Rate input -->
+                        <div class="transfer-amount-input" id="input-metal-continuous" style="display: none;">
+                            <div class="transfer-section-label">Transfer Rate</div>
+                            <div class="transfer-input-row">
+                                <input type="number" id="transfer-rate-metal" min="0.01" max="100" step="0.1" value="10">
+                                <span class="transfer-input-unit">% of stored metal</span>
+                            </div>
+                            <span class="transfer-hint">Stored: ${this.formatNumber(availableMetal)} kg</span>
+                        </div>
+                        
+                        <!-- One-Time Metal: Amount input -->
+                        <div class="transfer-amount-input" id="input-metal-onetime" style="display: none;">
+                            <div class="transfer-section-label">Metal Amount</div>
+                            <div class="transfer-input-row">
+                                <input type="number" id="transfer-metal-count" min="0" step="1e9" value="0">
+                                <span class="transfer-input-unit">kg</span>
+                            </div>
+                            <span class="transfer-hint">Max: ${this.formatNumber(availableMetal)} kg</span>
                         </div>
                     </div>
-                    <!-- Metal Transfer Tab -->
-                    <div class="transfer-tab-content" id="transfer-tab-metal">
-                        ${hasMassDriver ? `
-                        <div class="transfer-options">
-                            <div class="transfer-option">
-                                <label>
-                                    <input type="radio" name="transfer-type-metal" value="continuous" checked>
-                                    Continuous Transfer
-                                </label>
-                                <input type="number" id="transfer-rate-metal" min="0" step="1e9" value="${metalCapacity > 0 ? Math.min(metalCapacity, availableMetal) : 100e12}" 
-                                       placeholder="kg/day">
-                                <span class="transfer-hint">Default: ${this.formatNumber(100e12)} kg/day (100 GT/day)</span>
-                            </div>
-                            <div class="transfer-option">
-                                <label>
-                                    <input type="radio" name="transfer-type-metal" value="one-time">
-                                    One-Time Transfer
-                                </label>
-                                <input type="number" id="transfer-metal-count" min="0" step="1e9" value="0" 
-                                       placeholder="kg">
-                                <span class="transfer-hint">Max: ${this.formatNumber(availableMetal)} kg</span>
-                            </div>
-                        </div>
-                        ` : `
-                        <div class="transfer-error">
-                            <p>Mass driver required for metal transfers.</p>
-                            <p>Build a mass driver in the source zone to enable metal transfers.</p>
-                        </div>
-                        `}
-                    </div>
+                    
                     <div class="transfer-actions">
                         <button class="transfer-cancel">Cancel</button>
                         <button class="transfer-confirm">Confirm Transfer</button>
@@ -1358,7 +1548,7 @@ class OrbitalZoneSelector {
             // Calculate base transfer time (without mass driver boost)
             let baseTransferTime = this.calculateTransferTime(fromZone, toZone);
             
-            // Calculate transfer time with mass driver boost (for probe transfers)
+            // Calculate transfer time with mass driver boost
             probeTransferTime = baseTransferTime;
             if (hasMassDriver && window.gameEngine && window.gameEngine.transferSystem) {
                 const speedMultiplier = window.gameEngine.transferSystem.calculateMassDriverSpeedMultiplier(massDriverCount);
@@ -1367,31 +1557,61 @@ class OrbitalZoneSelector {
         }
         
         // Display transfer time with appropriate formatting
-        // Show probe transfer time (with mass driver boost if available)
         const timeEl = dialog.querySelector('#transfer-time');
-        if (timeEl && toZone) {
-            // Update time display when switching tabs
-            const updateTransferTime = () => {
-                const activeTab = dialog.querySelector('.transfer-tab.active');
-                const tabName = activeTab ? activeTab.dataset.tab : 'probes';
-                if (tabName === 'probes' && probeTransferTime !== null) {
-                    timeEl.textContent = this.formatTransferTime(probeTransferTime);
-                    if (hasMassDriver) {
-                        timeEl.textContent += ` (${massDriverCount} mass driver${massDriverCount > 1 ? 's' : ''})`;
-                    }
-                } else if (tabName === 'metal' && probeTransferTime !== null) {
-                    // Metal transfers use same time as probes (with mass driver boost)
-                    timeEl.textContent = this.formatTransferTime(probeTransferTime);
+        const availableEl = dialog.querySelector('#transfer-available-value');
+        
+        // Function to update the available display based on resource type
+        const updateAvailableDisplay = () => {
+            const resourceType = dialog.querySelector('input[name="resource-type"]:checked')?.value || 'probe';
+            if (availableEl) {
+                if (resourceType === 'probe') {
+                    availableEl.textContent = `${this.formatNumber(availableProbes)} probes`;
+                } else {
+                    availableEl.textContent = `${this.formatNumber(availableMetal)} kg metal`;
                 }
-            };
-            updateTransferTime();
+            }
+        };
+        
+        // Function to update the amount input visibility
+        const updateAmountInputs = () => {
+            const resourceType = dialog.querySelector('input[name="resource-type"]:checked')?.value || 'probe';
+            const transferMode = dialog.querySelector('input[name="transfer-mode"]:checked')?.value || 'one-time';
             
-            // Update when tabs change
-            const tabs = dialog.querySelectorAll('.transfer-tab');
-            tabs.forEach(tab => {
-                tab.addEventListener('click', updateTransferTime);
-            });
-        }
+            // Hide all input sections
+            dialog.querySelectorAll('.transfer-amount-input').forEach(el => el.style.display = 'none');
+            
+            // Show the appropriate input
+            const inputId = `input-${resourceType}-${transferMode === 'one-time' ? 'onetime' : 'continuous'}`;
+            const inputEl = dialog.querySelector(`#${inputId}`);
+            if (inputEl) {
+                inputEl.style.display = '';
+            }
+            
+            // Update available display
+            updateAvailableDisplay();
+        };
+        
+        // Function to update transfer time display
+        const updateTransferTime = () => {
+            if (timeEl && probeTransferTime !== null) {
+                timeEl.textContent = this.formatTransferTime(probeTransferTime);
+                if (hasMassDriver) {
+                    timeEl.textContent += ` (${massDriverCount} mass driver${massDriverCount > 1 ? 's' : ''})`;
+                }
+            }
+        };
+        
+        // Initial updates
+        updateTransferTime();
+        updateAmountInputs();
+        
+        // Add event listeners for radio buttons
+        dialog.querySelectorAll('input[name="resource-type"]').forEach(radio => {
+            radio.addEventListener('change', updateAmountInputs);
+        });
+        dialog.querySelectorAll('input[name="transfer-mode"]').forEach(radio => {
+            radio.addEventListener('change', updateAmountInputs);
+        });
         
         // Store dialog reference for updating destination
         dialog.updateDestination = (newToZoneId) => {
@@ -1405,14 +1625,6 @@ class OrbitalZoneSelector {
                 toZoneSpan.textContent = newToZone.name.replace(/\s+Orbit\s*$/i, '');
             }
             
-            // Update delta-v (first transfer-info-item contains delta-v)
-            const newDeltaV = this.calculateTransferDeltaV(fromZone, newToZone);
-            const deltaVItem = dialog.querySelector('.transfer-info-item');
-            const deltaVEl = deltaVItem ? deltaVItem.querySelector('.transfer-value') : null;
-            if (deltaVEl) {
-                deltaVEl.textContent = newDeltaV.toFixed(2) + ' km/s';
-            }
-            
             // Update transfer time
             let baseTransferTime = this.calculateTransferTime(fromZone, newToZone);
             let newProbeTransferTime = baseTransferTime;
@@ -1421,15 +1633,9 @@ class OrbitalZoneSelector {
                 newProbeTransferTime = baseTransferTime * speedMultiplier;
             }
             if (timeEl) {
-                const activeTab = dialog.querySelector('.transfer-tab.active');
-                const tabName = activeTab ? activeTab.dataset.tab : 'probes';
-                if (tabName === 'probes') {
-                    timeEl.textContent = this.formatTransferTime(newProbeTransferTime);
-                    if (hasMassDriver) {
-                        timeEl.textContent += ` (${massDriverCount} mass driver${massDriverCount > 1 ? 's' : ''})`;
-                    }
-                } else {
-                    timeEl.textContent = this.formatTransferTime(newProbeTransferTime);
+                timeEl.textContent = this.formatTransferTime(newProbeTransferTime);
+                if (hasMassDriver) {
+                    timeEl.textContent += ` (${massDriverCount} mass driver${massDriverCount > 1 ? 's' : ''})`;
                 }
             }
             
@@ -1512,44 +1718,7 @@ class OrbitalZoneSelector {
         
         dialog.querySelector('.transfer-cancel').addEventListener('click', closeDialog);
         
-        // Tab switching
-        const tabs = dialog.querySelectorAll('.transfer-tab');
-        const tabContents = dialog.querySelectorAll('.transfer-tab-content');
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                if (tab.classList.contains('disabled')) return;
-                
-                // Update active tab
-                tabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                
-                // Update active content
-                const tabName = tab.dataset.tab;
-                tabContents.forEach(content => {
-                    content.classList.remove('active');
-                    if (content.id === `transfer-tab-${tabName}`) {
-                        content.classList.add('active');
-                    }
-                });
-                
-                // Update info display
-                const probeInfo = dialog.querySelector('#transfer-probe-info');
-                const metalInfo = dialog.querySelector('#transfer-metal-info');
-                const capacityInfo = dialog.querySelector('#transfer-capacity-info');
-                if (tabName === 'probes') {
-                    if (probeInfo) probeInfo.style.display = '';
-                    if (metalInfo) metalInfo.style.display = 'none';
-                    if (capacityInfo) capacityInfo.style.display = 'none';
-                } else {
-                    if (probeInfo) probeInfo.style.display = 'none';
-                    if (metalInfo) metalInfo.style.display = '';
-                    if (capacityInfo) capacityInfo.style.display = '';
-                }
-            });
-        });
-        
-        // Confirm button is now optional - selecting a zone will send the transfer
-        // But keep it for manual confirmation if needed
+        // Confirm button
         dialog.querySelector('.transfer-confirm').addEventListener('click', () => {
             if (!toZoneId) {
                 // No destination selected yet
@@ -1691,29 +1860,27 @@ class OrbitalZoneSelector {
         const zoneStructures = structuresByZone[fromZoneId] || {};
         const hasMassDriver = (zoneStructures['mass_driver'] || 0) > 0;
         
-        // Determine which tab is active
-        const activeTab = dialog.querySelector('.transfer-tab.active');
-        const tabName = activeTab ? activeTab.dataset.tab : 'probes';
+        // Get selected resource type and transfer mode from radio buttons
+        const resourceType = dialog.querySelector('input[name="resource-type"]:checked')?.value || 'probe';
+        const transferMode = dialog.querySelector('input[name="transfer-mode"]:checked')?.value || 'one-time';
         
-        if (tabName === 'probes') {
+        if (resourceType === 'probe') {
             // Probe transfer
-            const transferType = dialog.querySelector('input[name="transfer-type-probes"]:checked')?.value;
-            if (transferType === 'one-time') {
+            if (transferMode === 'one-time') {
                 const count = parseInt(dialog.querySelector('#transfer-count').value) || 1;
                 this.createTransfer(fromZoneId, toZoneId, 'probe', 'one-time', count, 0);
             } else {
                 const rate = parseFloat(dialog.querySelector('#transfer-rate-probes').value) || 1;
                 this.createTransfer(fromZoneId, toZoneId, 'probe', 'continuous', 0, rate);
             }
-        } else if (tabName === 'metal' && hasMassDriver) {
+        } else if (resourceType === 'metal' && hasMassDriver) {
             // Metal transfer
-            const transferType = dialog.querySelector('input[name="transfer-type-metal"]:checked')?.value;
-            if (transferType === 'one-time') {
+            if (transferMode === 'one-time') {
                 const metalKg = parseFloat(dialog.querySelector('#transfer-metal-count').value) || 0;
                 this.createTransfer(fromZoneId, toZoneId, 'metal', 'one-time', metalKg, 0);
             } else {
-                const rateKgPerDay = parseFloat(dialog.querySelector('#transfer-rate-metal').value) || 100e12;
-                this.createTransfer(fromZoneId, toZoneId, 'metal', 'continuous', 0, rateKgPerDay);
+                const ratePercentage = parseFloat(dialog.querySelector('#transfer-rate-metal').value) || 10;
+                this.createTransfer(fromZoneId, toZoneId, 'metal', 'continuous', 0, ratePercentage);
             }
         }
     }
@@ -1736,9 +1903,9 @@ class OrbitalZoneSelector {
                 }
             } else {
                 if (resourceType === 'probe') {
-                    actionData.rate = rate; // Percentage for probes
+                    actionData.rate = rate; // Percentage of production for probes
                 } else {
-                    actionData.rate = rate; // kg/day for metal
+                    actionData.rate = rate; // Percentage of stored metal
                 }
             }
             
@@ -1775,6 +1942,11 @@ class OrbitalZoneSelector {
             }
         }
         hash = ((hash << 5) - hash) + (this.waitingForTransferDestination ? 1 : 0);
+        
+        // Hash quick transfer mode
+        if (this.quickTransferMode) {
+            hash = ((hash << 5) - hash) + (this.quickTransferMode === 'probe' ? 2 : 3);
+        }
         
         // Hash probe counts and structures (these change infrequently)
         // Read from derived.zones (pre-calculated in worker)

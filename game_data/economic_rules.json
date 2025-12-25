@@ -1,0 +1,193 @@
+{
+  "description": "Consolidated economic rules for game balancing. All base rates, skill coefficients, and scaling factors in one place.",
+  
+  "probe": {
+    "mass_kg": 100,
+    "base_mining_rate_kg_per_day": 100,
+    "base_build_rate_kg_per_day": 20,
+    "base_energy_consumption_w": 250000
+  },
+  
+  "structures": {
+    "base_probe_mass_kg": 100,
+    "geometric_scaling_exponent": 2.1
+  },
+  
+  "dyson_sphere": {
+    "target_mass_kg": 2e23,
+    "power_per_sq_m_w": 5000,
+    "mass_per_sq_m_kg": 2.0,
+    "power_per_kg_w": 2500
+  },
+  
+  "energy": {
+    "constant_supply_w": 100000
+  },
+  
+  "alpha_factors": {
+    "description": "Alpha factors control how much benefit research provides. Higher = more benefit.",
+    "structure_performance": 0.8,
+    "probe_performance": 0.75,
+    "dyson_performance": 0.55,
+    "cost_scaling": 0.25
+  },
+  
+  "skill_coefficients": {
+    "description": "Coefficients for combining skills into upgrade factors. Uses geometric mean formula: F = G^alpha where G = (c1*s1 * c2*s2 * ...)^(1/n)",
+    
+    "probe_mining": {
+      "description": "Skills affecting probe mining rate",
+      "manipulation": 1.0,
+      "strength": 0.6,
+      "sensors": 0.4,
+      "locomotion": 0.3
+    },
+    
+    "probe_building": {
+      "description": "Skills affecting probe build/replication rate",
+      "production": 1.0,
+      "manipulation": 1.0,
+      "strength": 0.4,
+      "materials": 0.2
+    },
+    
+    "structure_mining": {
+      "description": "Skills affecting structure mining rate",
+      "manipulation": 1.0,
+      "strength": 1.0,
+      "locomotion": 0.4,
+      "materials": 0.2
+    },
+    
+    "structure_building": {
+      "description": "Skills affecting structure build rate",
+      "production": 1.0,
+      "manipulation": 1.0,
+      "materials": 0.4,
+      "strength": 0.2
+    },
+    
+    "energy_generation": {
+      "description": "Skills affecting energy production",
+      "solar_pv": 1.0,
+      "energy_converter": 1.0,
+      "radiator": 1.0
+    },
+    
+    "compute": {
+      "description": "Skills affecting compute/intelligence production",
+      "cpu": 1.0,
+      "gpu": 1.0,
+      "interconnect": 1.0,
+      "io_bandwidth": 1.0
+    },
+    
+    "dyson_construction": {
+      "description": "Skills affecting Dyson sphere construction",
+      "production": 1.0,
+      "manipulation": 1.0,
+      "materials": 0.4,
+      "dyson_construction": 0.2
+    },
+    
+    "dyson_energy": {
+      "description": "Skills affecting Dyson sphere energy output",
+      "solar_pv": 1.0,
+      "dyson_construction": 1.0,
+      "radiator": 0.4
+    },
+    
+    "delta_v_reduction": {
+      "description": "Reduces delta-v fuel requirement for transfers",
+      "propulsion": 1.0,
+      "thrust": 0.3,
+      "materials": 0.2
+    },
+    
+    "transfer_speed": {
+      "description": "Reduces transfer travel time",
+      "propulsion": 0.5,
+      "thrust": 1.0,
+      "locomotion": 0.3
+    },
+    
+    "mass_driver_capacity": {
+      "description": "Metal kg/day launch capacity",
+      "strength": 1.0,
+      "energy_transport": 0.8,
+      "locomotion": 0.4
+    },
+    
+    "metal_extraction": {
+      "description": "Ore to metal conversion efficiency",
+      "materials": 1.0,
+      "sensors": 0.5,
+      "heat_pump": 0.3
+    },
+    
+    "energy_consumption_reduction": {
+      "description": "Reduces energy cost of activities",
+      "energy_transport": 1.0,
+      "radiator": 0.6,
+      "heat_pump": 0.4
+    },
+    
+    "battery_capacity": {
+      "description": "Energy storage capacity",
+      "battery_density": 1.0,
+      "materials": 0.4
+    },
+    
+    "salvage_efficiency": {
+      "description": "Metal recovery from scrapping",
+      "recycling": 1.0,
+      "manipulation": 0.6,
+      "materials": 0.4
+    },
+    
+    "slag_recycling": {
+      "description": "Metal recovery from slag",
+      "recycling": 1.0,
+      "heat_pump": 0.5,
+      "materials": 0.3
+    },
+    
+    "research_speed": {
+      "description": "Research speed multiplier",
+      "research_rate": 1.0,
+      "learning": 0.6,
+      "cpu": 0.4,
+      "sensors": 0.2
+    },
+    
+    "probe_energy_production": {
+      "description": "Skills affecting probe energy generation",
+      "solar_pv": 1.0,
+      "energy_converter": 0.6,
+      "radiator": 0.4
+    },
+    
+    "probe_energy_consumption": {
+      "description": "Skills reducing probe energy consumption",
+      "energy_transport": 1.0,
+      "radiator": 0.6,
+      "heat_pump": 0.4
+    }
+  },
+  
+  "crowding": {
+    "description": "Zone crowding penalty parameters. At 1% probe mass ratio: no penalty. At 90%: 2% efficiency.",
+    "threshold_ratio": 0.01,
+    "decay_rate": 4.395
+  },
+  
+  "time": {
+    "seconds_per_day": 86400,
+    "ticks_per_second": 60
+  },
+  
+  "propulsion": {
+    "base_isp_seconds": 500
+  }
+}
+

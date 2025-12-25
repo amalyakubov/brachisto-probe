@@ -17,6 +17,30 @@ class SolarSystem {
         this.time = 0;
         this.zoneClouds = null; // ZoneClouds instance
         this.initialZoneMasses = {}; // Store initial mass for each zone
+        
+        // Resource particle visualization
+        // Stored metal and slag appear as particles orbiting around the planet
+        // Particles spawn near planet and orbit at 80% speed, forming trailing cloud
+        // When resources are consumed, particles are removed
+        this.resourceParticles = {}; // {zoneId: THREE.Points}
+        this.resourceParticleData = {}; // {zoneId: {metal: [...], slag: [...]}}
+        this.previousResources = {}; // {zoneId: {metal: 0, slag: 0}} - track changes
+        this.maxResourceParticles = 4000; // Max particles per planet (metal + slag combined)
+        
+        // Resource scaling: 1000kg = 1 dot (linear), then log scaling after 100 dots
+        this.resourceKgPerDot = 1000; // 1000kg of slag/metal = 1 dot
+        this.resourceLinearMaxDots = 100; // First 100 dots are linear (100,000 kg)
+        this.resourceLogMaxMass = 1e24; // Reference mass for max dots - full planet mass scale
+        
+        // Resource colors (metal = silver, slag = brown-grey)
+        this.resourceColors = {
+            metal: new THREE.Color(0xC0C0C0),    // Silver
+            slag: new THREE.Color(0x5C4033)       // Brown-grey
+        };
+        
+        // Particle drift settings
+        this.particleDriftDuration = 3.0; // Seconds for particle to drift from spawn to orbit
+        this.particleSpawnRadius = 0.1; // Initial spawn offset from planet center
 
         // Real-world planet data (radii in km, orbital distances in km)
         // 1 AU = 149,600,000 km
@@ -61,7 +85,7 @@ class SolarSystem {
 
         // Scale factors for visualization (target sizes in 3D units)
         this.radiusScale = 0.5; // Max planet radius will be 0.5 units
-        this.orbitScale = 160.0;  // Max orbit distance in view units - increase to spread planets further apart, decrease to bring them closer
+        this.orbitScale = 120.0;  // Max orbit distance in view units - increase to spread planets further apart, decrease to bring them closer
         this.sunScale = 1.0;     // Sun will be 1.0 units
         
         // Store Mercury's orbit for reference (will be set to 6 solar radii)
@@ -453,6 +477,10 @@ class SolarSystem {
         
         // Create comets after planets
         this.createComets();
+        
+        // Initialize resource particle visualization for all planets
+        // Metal and slag particles spawn from planet position and drift into orbit
+        this.initResourceParticles();
     }
     
     createComets() {
@@ -595,11 +623,12 @@ class SolarSystem {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         
         // Use LineDashedMaterial for dotted effect
+        // Darkened to prevent bloom
         const material = new THREE.LineDashedMaterial({
-            color: 0x888888,
+            color: 0x444444,
             dashSize: dashSize,
             gapSize: gapSize,
-            opacity: 0.4,
+            opacity: 0.35,
             transparent: true
         });
         
@@ -699,8 +728,9 @@ class SolarSystem {
         
         // Use MeshStandardMaterial for realistic lighting with proper color
         // Reduced metalness and increased roughness for better shadow visibility
+        // Colors darkened to prevent bloom from washing out details
         const planetMaterial = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(color),
+            color: new THREE.Color(color).multiplyScalar(0.6),
             metalness: 0.1,
             roughness: 0.9,
             emissive: 0x000000,
@@ -843,7 +873,7 @@ class SolarSystem {
                     { start: 0.55, end: 1.0, opacity: 0.03, color: [0.38, 0.30, 0.24] }
                 ],
                 particleCount: 15000,
-                brightness: 0.4  // Very dim compared to Saturn
+                brightness: 0.25  // Very dim compared to Saturn, reduced to prevent bloom
             },
             saturn: {
                 // Saturn's rings extend from ~1.2x to ~2.3x the planet radius
@@ -871,7 +901,7 @@ class SolarSystem {
                     { start: 0.95, end: 1.0, opacity: 0.1, color: [0.65, 0.62, 0.55] }
                 ],
                 particleCount: 50000,
-                brightness: 1.2
+                brightness: 0.7  // Reduced from 1.2 to prevent bloom
             },
             uranus: {
                 // Uranus rings are narrower and fainter
@@ -903,7 +933,7 @@ class SolarSystem {
                     { start: 0.95, end: 1.0, opacity: 0.12, color: [0.28, 0.33, 0.4] }
                 ],
                 particleCount: 25000,
-                brightness: 0.7
+                brightness: 0.4  // Reduced from 0.7 to prevent bloom
             }
         };
         
@@ -1274,7 +1304,7 @@ class SolarSystem {
             
             const moonGeometry = new THREE.SphereGeometry(moonRadius, 16, 16);
             const moonMaterial = new THREE.MeshStandardMaterial({
-                color: new THREE.Color(moon.color),
+                color: new THREE.Color(moon.color).multiplyScalar(0.6),
                 metalness: 0.1,
                 roughness: 0.9,
                 transparent: true,
@@ -1307,10 +1337,10 @@ class SolarSystem {
             // We'll handle the transformation in the update loop
             moonMesh.position.set(x, y, z);
             
-            // Calculate orbital speed based on period
-            // Shorter period = faster orbit
-            const baseSpeed = 0.1; // Base speed factor
-            const orbitalSpeed = baseSpeed / moon.period_days;
+            // Calculate orbital speed using same Kepler's law formula as planets
+            // This ensures moons orbit at realistic relative speeds
+            // Earth's Moon will complete ~13 orbits per Earth year (matching real 27.32 day period)
+            const orbitalSpeed = 0.01 / Math.sqrt(moon.period_days / 365.25);
             
             moonMesh.userData = {
                 planetZoneId: zone.id,
@@ -1320,7 +1350,7 @@ class SolarSystem {
                 orbitalSpeed: orbitalSpeed,
                 planetTilt: planetTilt,
                 moonInclination: moonInclination,
-                orbitInEquatorialPlane: ['earth', 'mars', 'jupiter', 'saturn', 'uranus'].includes(zone.id)
+                orbitInEquatorialPlane: ['mars', 'jupiter', 'saturn', 'uranus'].includes(zone.id)
             };
             
             this.moons[zone.id].push(moonMesh);
@@ -1378,8 +1408,8 @@ class SolarSystem {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         
         const material = new THREE.LineBasicMaterial({
-            color: color,
-            opacity: 0.3,
+            color: new THREE.Color(color).multiplyScalar(0.3),
+            opacity: 0.25,
             transparent: true
         });
         
@@ -1419,9 +1449,10 @@ class SolarSystem {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         
         // Use dashed material for Dyson orbit to distinguish from planet orbits
+        // Darkened to prevent bloom
         const material = new THREE.LineDashedMaterial({
-            color: color,
-            opacity: 0.6,
+            color: new THREE.Color(color).multiplyScalar(0.3),
+            opacity: 0.4,
             transparent: true,
             dashSize: 0.3,
             gapSize: 0.15
@@ -1557,13 +1588,13 @@ class SolarSystem {
             const normalizedSize = Math.max(0, Math.min(1, (logDiameter - logMin) / (logMax - logMin)));
             const asteroidRadius = 0.015 + normalizedSize * 0.035; // 0.015 to 0.05 visual units (much smaller)
             
-            // Create asteroid mesh
+            // Create asteroid mesh - darkened to prevent bloom
             const geometry = new THREE.SphereGeometry(asteroidRadius, 12, 12);
             const material = new THREE.MeshStandardMaterial({
-                color: new THREE.Color(asteroid.color),
+                color: new THREE.Color(asteroid.color).multiplyScalar(0.5),
                 metalness: 0.2,
                 roughness: 0.85,
-                emissive: new THREE.Color(asteroid.color).multiplyScalar(0.05)
+                emissive: 0x000000
             });
             
             const asteroidMesh = new THREE.Mesh(geometry, material);
@@ -1746,6 +1777,495 @@ class SolarSystem {
             totalParticles: particleCount
         };
         this.scene.add(this.oortCloud);
+    }
+    
+    /**
+     * Initialize resource particle visualization for all planets
+     * Creates a single particle system per planet for metal and slag
+     * Rocky planets form a flat accretion disc; gas giants form spherical clouds
+     */
+    initResourceParticles() {
+        // Only create resource particles for planets (not belts)
+        const planetZones = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'];
+        
+        // Calculate accretion disc ring boundaries for rocky planets
+        // Each planet gets a ring from halfway to previous neighbor to halfway to next neighbor
+        const rockyPlanetOrbits = {};
+        this.rockyPlanets.forEach(zoneId => {
+            const planetInfo = this.planetData[zoneId];
+            if (planetInfo) {
+                rockyPlanetOrbits[zoneId] = this.scaleRockyPlanetOrbit(planetInfo.orbit_km);
+            }
+        });
+        
+        // Calculate ring boundaries for continuous accretion disc
+        // Order: dyson -> mercury -> venus -> earth -> mars -> asteroid_belt
+        const dysonOrbit = this.dysonOrbitRadius || (rockyPlanetOrbits.mercury * 0.75);
+        const asteroidBeltInner = rockyPlanetOrbits.mars * 1.3; // Inner edge of asteroid belt
+        
+        const accretionRingBounds = {
+            mercury: {
+                inner: dysonOrbit * 1.05, // Just outside Dyson
+                outer: (rockyPlanetOrbits.mercury + rockyPlanetOrbits.venus) / 2
+            },
+            venus: {
+                inner: (rockyPlanetOrbits.mercury + rockyPlanetOrbits.venus) / 2,
+                outer: (rockyPlanetOrbits.venus + rockyPlanetOrbits.earth) / 2
+            },
+            earth: {
+                inner: (rockyPlanetOrbits.venus + rockyPlanetOrbits.earth) / 2,
+                outer: (rockyPlanetOrbits.earth + rockyPlanetOrbits.mars) / 2
+            },
+            mars: {
+                inner: (rockyPlanetOrbits.earth + rockyPlanetOrbits.mars) / 2,
+                outer: asteroidBeltInner
+            }
+        };
+        
+        planetZones.forEach(zoneId => {
+            const planet = this.planets[zoneId];
+            const planetInfo = this.planetData[zoneId];
+            if (!planet || !planetInfo) return;
+            
+            const planetRadius = this.logScaleRadius(planetInfo.radius_km);
+            const isRocky = this.rockyPlanets.includes(zoneId);
+            
+            // Get orbit radius for this planet
+            const orbitRadius = isRocky 
+                ? this.scaleRockyPlanetOrbit(planetInfo.orbit_km)
+                : this.logScaleOrbit(planetInfo.orbit_km);
+            
+            // Create resource particle system
+            const particleSystem = this.createResourceParticleSystem(
+                zoneId, 
+                planetRadius, 
+                isRocky,
+                orbitRadius,
+                isRocky ? accretionRingBounds[zoneId] : null
+            );
+            
+            // Store reference
+            this.resourceParticles[zoneId] = particleSystem;
+            
+            // Initialize particle data arrays
+            this.resourceParticleData[zoneId] = {
+                metal: [],  // Active metal particles
+                slag: []    // Active slag particles
+            };
+            
+            // Initialize previous resource tracking
+            this.previousResources[zoneId] = {
+                metal: 0,
+                slag: 0
+            };
+            
+            // Add to scene
+            this.scene.add(particleSystem);
+        });
+        
+        console.log(`SolarSystem: Created resource particles for ${Object.keys(this.resourceParticles).length} planets`);
+    }
+    
+    /**
+     * Create resource particle system for a planet
+     * @param {string} zoneId - Planet zone ID
+     * @param {number} planetRadius - Visual radius of the planet
+     * @param {boolean} isAccretionDisc - True for rocky planets (flat disc), false for gas giants (spherical)
+     * @param {number} orbitRadius - Planet's orbital radius
+     * @param {Object} ringBounds - {inner, outer} for accretion disc mode
+     * @returns {THREE.Points} Particle system
+     */
+    createResourceParticleSystem(zoneId, planetRadius, isAccretionDisc, orbitRadius, ringBounds) {
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(this.maxResourceParticles * 3);
+        const colors = new Float32Array(this.maxResourceParticles * 3);
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setDrawRange(0, 0); // Start with no visible particles
+        
+        const material = new THREE.PointsMaterial({
+            size: isAccretionDisc ? 0.03 : 0.025, // Slightly larger for accretion disc visibility
+            sizeAttenuation: true,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false,
+            depthTest: true
+        });
+        
+        const points = new THREE.Points(geometry, material);
+        points.renderOrder = isAccretionDisc ? 85 : 90; // Accretion disc behind planet clouds
+        points.frustumCulled = false;
+        
+        // Store orbital parameters for spawning new particles
+        if (isAccretionDisc && ringBounds) {
+            // Accretion disc mode: particles orbit sun in a flat ring
+            points.userData = {
+                zoneId: zoneId,
+                planetRadius: planetRadius,
+                isAccretionDisc: true,
+                orbitRadius: orbitRadius,
+                ringInner: ringBounds.inner,
+                ringOuter: ringBounds.outer,
+                verticalSpread: 0.15 // Very thin disc
+            };
+        } else {
+            // Spherical cloud mode: particles orbit planet
+            points.userData = {
+                zoneId: zoneId,
+                planetRadius: planetRadius,
+                isAccretionDisc: false,
+                minRadius: planetRadius * 1.5,
+                maxRadius: planetRadius * 7.0
+            };
+        }
+        
+        return points;
+    }
+    
+    /**
+     * Calculate the number of resource dots from mass using multi-scale formula:
+     * - 0 to 100 dots: linear at 1000kg per dot
+     * - 100+ dots: logarithmic scaling up to maxDots
+     * @param {number} massKg - Mass in kg (slag or metal)
+     * @param {number} maxDots - Maximum number of dots for this resource type
+     * @returns {number} Number of dots to display
+     */
+    calculateResourceDots(massKg, maxDots) {
+        if (massKg <= 0) return 0;
+        
+        const linearMassMax = this.resourceLinearMaxDots * this.resourceKgPerDot; // 100,000 kg
+        
+        if (massKg <= linearMassMax) {
+            // Linear range: 1 dot per 1000kg
+            return Math.floor(massKg / this.resourceKgPerDot);
+        }
+        
+        // Logarithmic range: 100 dots at 100,000kg, maxDots at resourceLogMaxMass
+        const logMassRange = Math.log10(this.resourceLogMaxMass) - Math.log10(linearMassMax);
+        const logProgress = (Math.log10(massKg) - Math.log10(linearMassMax)) / logMassRange;
+        const logDots = this.resourceLinearMaxDots + (maxDots - this.resourceLinearMaxDots) * logProgress;
+        
+        return Math.min(maxDots, Math.max(this.resourceLinearMaxDots, Math.floor(logDots)));
+    }
+    
+    /**
+     * Spawn a new resource particle from mining
+     * Particles spawn in a cloud around the planet and orbit sun at reduced speed (80%)
+     * This causes the planet to "sweep out" a trailing cloud of mined material
+     * For rocky planets: flat accretion disc orbiting sun
+     * For gas giants: spherical cloud orbiting planet
+     * @param {string} zoneId - Planet zone ID
+     * @param {string} type - 'metal' or 'slag'
+     * @returns {Object} New particle data
+     */
+    spawnResourceParticle(zoneId, type) {
+        const particleSystem = this.resourceParticles[zoneId];
+        if (!particleSystem) return null;
+        
+        const userData = particleSystem.userData;
+        const planet = this.planets[zoneId];
+        if (!planet) return null;
+        
+        if (userData.isAccretionDisc) {
+            // Accretion disc mode: particle spawns near planet and orbits sun at reduced speed
+            // Get planet's current orbital angle
+            const planetAngle = planet.userData?.orbitalAngle || 0;
+            
+            // Spawn in a cloud around the planet's current position
+            // Spread is 10x the planet's visual radius to create a larger trailing ring behind the planet
+            const planetRadius = userData.planetRadius;
+            
+            // Angular spread: 10x planet radius as arc length at orbital distance
+            // arc = angle * radius, so angle = arc / radius = (10 * planetRadius) / orbitRadius
+            const angleSpread = (10 * planetRadius) / userData.orbitRadius;
+            const spawnAngle = planetAngle + (Math.random() - 0.5) * angleSpread * 2; // Full diameter spread
+            
+            // Radial spread: 10x planet radius inward/outward
+            const radialSpread = planetRadius * 10;
+            const orbitDistance = userData.orbitRadius + (Math.random() - 0.5) * radialSpread * 2;
+            
+            // Vertical spread: kept small for flat ring appearance
+            const yOffset = (Math.random() - 0.5) * planetRadius * 0.5;
+            
+            // Orbital speed based on Kepler's law, but REDUCED to 80%
+            // This makes the planet move faster than the debris, leaving a trailing cloud
+            const earthOrbitRadius = this.scaleRockyPlanetOrbit(this.planetData.earth.orbit_km);
+            const keplerSpeed = 0.008 * Math.sqrt(earthOrbitRadius / orbitDistance);
+            // Reduce to 80% of Kepler speed + small random variation
+            const orbitalSpeed = keplerSpeed * 0.80 * (0.97 + Math.random() * 0.06);
+            
+            return {
+                type: type,
+                isAccretionDisc: true,
+                // Orbital parameters (orbiting sun at fixed position)
+                orbitAngle: spawnAngle,      // Starting angle (where it spawned)
+                orbitDistance: orbitDistance, // Fixed orbital distance
+                yOffset: yOffset,
+                orbitalSpeed: orbitalSpeed,   // 80% of Kepler speed
+                // Spawn state
+                spawnTime: this.time,
+                drifting: false // No drift animation for mining particles
+            };
+        } else {
+            // Spherical cloud mode: particle orbits planet
+            // Random target orbit parameters
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const t = Math.random();
+            const targetRadius = userData.minRadius + (userData.maxRadius - userData.minRadius) * (1 - Math.pow(1 - t, 2));
+            
+            // Particle starts at planet position (inside the probe cloud)
+            const spawnOffset = this.particleSpawnRadius * userData.planetRadius;
+            
+            return {
+                type: type,
+                isAccretionDisc: false,
+                // Target orbital parameters
+                theta: theta,
+                phi: phi,
+                targetRadius: targetRadius,
+                orbitalSpeed: 0.08 + Math.random() * 0.15, // Orbit speed around planet
+                // Spawn/drift state
+                spawnTime: this.time,
+                currentRadius: spawnOffset,
+                drifting: true
+            };
+        }
+    }
+    
+    /**
+     * Create a "mass driver" particle that shoots out from a planet along a Hohmann transfer
+     * This animation is used for launching material to the Dyson sphere
+     * Particle shoots out from planet position and decelerates into target orbit
+     * @param {string} fromZoneId - Source planet zone ID
+     * @param {number} targetOrbitRadius - Target orbital radius (e.g., Dyson sphere)
+     * @param {string} type - 'metal' or 'slag'
+     * @returns {Object} New particle data with Hohmann transfer parameters
+     */
+    spawnMassDriverParticle(fromZoneId, targetOrbitRadius, type) {
+        const particleSystem = this.resourceParticles[fromZoneId];
+        if (!particleSystem) return null;
+        
+        const userData = particleSystem.userData;
+        const planet = this.planets[fromZoneId];
+        if (!planet) return null;
+        
+        // Get planet's current orbital angle for spawn position
+        const planetAngle = planet.userData?.orbitalAngle || 0;
+        const planetOrbitRadius = userData.orbitRadius;
+        
+        // Random target angle in the target orbit
+        const targetAngle = Math.random() * Math.PI * 2;
+        
+        // Small vertical offset
+        const yOffset = (Math.random() - 0.5) * 0.1;
+        
+        // Orbital speed at target (Kepler's law)
+        const earthOrbitRadius = this.scaleRockyPlanetOrbit(this.planetData.earth.orbit_km);
+        const keplerSpeed = 0.008 * Math.sqrt(earthOrbitRadius / targetOrbitRadius);
+        const orbitalSpeed = keplerSpeed * (0.95 + Math.random() * 0.1);
+        
+        return {
+            type: type,
+            isAccretionDisc: true,
+            isMassDriver: true, // Flag for special handling
+            // Target orbital parameters (at Dyson sphere)
+            targetAngle: targetAngle,
+            targetDistance: targetOrbitRadius,
+            yOffset: yOffset,
+            orbitalSpeed: orbitalSpeed,
+            // Spawn state: starts at planet position
+            spawnTime: this.time,
+            spawnAngle: planetAngle,
+            spawnDistance: planetOrbitRadius,
+            drifting: true, // Uses drift animation to simulate Hohmann transfer
+            transferDuration: 5.0 // Longer duration for dramatic effect
+        };
+    }
+    
+    /**
+     * Update resource particle visualization based on game state
+     * Spawns new particles when resources increase, removes when depleted
+     * @param {Object} gameState - Current game state with zone data
+     */
+    updateResourceParticles(gameState) {
+        if (!gameState || !gameState.zones) return;
+        
+        const zones = gameState.zones;
+        const maxMetalDots = Math.floor(this.maxResourceParticles * 0.4); // 40% for metal
+        const maxSlagDots = Math.floor(this.maxResourceParticles * 0.6);  // 60% for slag
+        
+        Object.keys(this.resourceParticles).forEach(zoneId => {
+            const particleSystem = this.resourceParticles[zoneId];
+            const particleData = this.resourceParticleData[zoneId];
+            const zone = zones[zoneId];
+            
+            if (!particleSystem || !particleData || !zone) return;
+            
+            // Get current resource amounts
+            const currentMetal = zone.stored_metal || 0;
+            const currentSlag = zone.slag_mass || 0;
+            
+            // Calculate target dot counts
+            const targetMetalDots = this.calculateResourceDots(currentMetal, maxMetalDots);
+            const targetSlagDots = this.calculateResourceDots(currentSlag, maxSlagDots);
+            
+            // Get previous resource tracking
+            const prev = this.previousResources[zoneId] || { metal: 0, slag: 0 };
+            const prevMetalDots = this.calculateResourceDots(prev.metal, maxMetalDots);
+            const prevSlagDots = this.calculateResourceDots(prev.slag, maxSlagDots);
+            
+            // Handle metal particles
+            const metalDiff = targetMetalDots - particleData.metal.length;
+            if (metalDiff > 0) {
+                // Spawn new metal particles
+                for (let i = 0; i < metalDiff; i++) {
+                    const particle = this.spawnResourceParticle(zoneId, 'metal');
+                    if (particle) particleData.metal.push(particle);
+                }
+            } else if (metalDiff < 0) {
+                // Remove metal particles (oldest first - those that have drifted furthest)
+                particleData.metal.sort((a, b) => a.spawnTime - b.spawnTime);
+                particleData.metal.splice(0, -metalDiff);
+            }
+            
+            // Handle slag particles
+            const slagDiff = targetSlagDots - particleData.slag.length;
+            if (slagDiff > 0) {
+                // Spawn new slag particles
+                for (let i = 0; i < slagDiff; i++) {
+                    const particle = this.spawnResourceParticle(zoneId, 'slag');
+                    if (particle) particleData.slag.push(particle);
+                }
+            } else if (slagDiff < 0) {
+                // Remove slag particles (oldest first)
+                particleData.slag.sort((a, b) => a.spawnTime - b.spawnTime);
+                particleData.slag.splice(0, -slagDiff);
+            }
+            
+            // Update previous tracking
+            this.previousResources[zoneId] = {
+                metal: currentMetal,
+                slag: currentSlag
+            };
+            
+            // Rebuild the particle buffer with all active particles
+            this.rebuildResourceParticleBuffer(zoneId);
+        });
+    }
+    
+    /**
+     * Rebuild the particle buffer for a zone with current active particles
+     * Handles both accretion disc (rocky planets) and spherical cloud (gas giants)
+     * @param {string} zoneId - Planet zone ID
+     */
+    rebuildResourceParticleBuffer(zoneId) {
+        const particleSystem = this.resourceParticles[zoneId];
+        const particleData = this.resourceParticleData[zoneId];
+        const planet = this.planets[zoneId];
+        
+        if (!particleSystem || !particleData || !planet) return;
+        
+        const allParticles = [...particleData.metal, ...particleData.slag];
+        const positions = particleSystem.geometry.attributes.position.array;
+        const colors = particleSystem.geometry.attributes.color.array;
+        const userData = particleSystem.userData;
+        
+        for (let i = 0; i < allParticles.length && i < this.maxResourceParticles; i++) {
+            const p = allParticles[i];
+            let x, y, z;
+            
+            if (p.isAccretionDisc) {
+                // Accretion disc mode: particle orbits sun in flat ring
+                const timeSinceSpawn = this.time - p.spawnTime;
+                let currentAngle, currentDistance;
+                
+                if (p.isMassDriver && p.drifting) {
+                    // Mass driver mode: shoots out from planet along Hohmann transfer
+                    const transferDuration = p.transferDuration || this.particleDriftDuration;
+                    const driftProgress = Math.min(1, timeSinceSpawn / transferDuration);
+                    const eased = 1 - Math.pow(1 - driftProgress, 3);
+                    
+                    // Interpolate from spawn position to target orbit
+                    const baseAngle = p.spawnAngle + (p.targetAngle - p.spawnAngle) * eased;
+                    const orbitalOffset = timeSinceSpawn * p.orbitalSpeed;
+                    currentAngle = baseAngle + orbitalOffset;
+                    currentDistance = p.spawnDistance + (p.targetDistance - p.spawnDistance) * eased;
+                    
+                    if (driftProgress >= 1) {
+                        p.drifting = false;
+                    }
+                } else if (p.drifting) {
+                    // Legacy drifting particle (should not occur for new mining particles)
+                    const driftProgress = Math.min(1, timeSinceSpawn / this.particleDriftDuration);
+                    const eased = 1 - Math.pow(1 - driftProgress, 3);
+                    const orbitalOffset = timeSinceSpawn * p.orbitalSpeed;
+                    
+                    const baseAngle = p.spawnAngle + (p.targetAngle - p.spawnAngle) * eased;
+                    currentAngle = baseAngle + orbitalOffset;
+                    currentDistance = p.spawnDistance + (p.targetDistance - p.spawnDistance) * eased;
+                    
+                    if (driftProgress >= 1) {
+                        p.drifting = false;
+                    }
+                } else {
+                    // Mining particle: spawned in place, orbits at reduced speed
+                    // Uses orbitAngle (spawn position) + accumulated orbital motion
+                    const orbitalOffset = timeSinceSpawn * p.orbitalSpeed;
+                    currentAngle = p.orbitAngle + orbitalOffset;
+                    currentDistance = p.orbitDistance;
+                }
+                
+                // Calculate position in ecliptic plane (orbiting sun at origin)
+                x = Math.cos(currentAngle) * currentDistance;
+                y = p.yOffset; // Small vertical offset for disc thickness
+                z = Math.sin(currentAngle) * currentDistance;
+            } else {
+                // Spherical cloud mode: particle orbits planet
+                let radius;
+                if (p.drifting) {
+                    const driftProgress = Math.min(1, (this.time - p.spawnTime) / this.particleDriftDuration);
+                    const eased = 1 - Math.pow(1 - driftProgress, 3);
+                    radius = p.currentRadius + (p.targetRadius - p.currentRadius) * eased;
+                    
+                    if (driftProgress >= 1) {
+                        p.drifting = false;
+                        p.currentRadius = p.targetRadius;
+                    }
+                } else {
+                    radius = p.targetRadius;
+                }
+                
+                // Use theta that includes orbital motion since spawn (not absolute time)
+                const timeSinceSpawn = this.time - p.spawnTime;
+                const theta = p.theta + timeSinceSpawn * p.orbitalSpeed;
+                const phi = p.phi;
+                
+                // Calculate world position relative to planet
+                x = radius * Math.sin(phi) * Math.cos(theta) + planet.position.x;
+                y = radius * Math.cos(phi) + planet.position.y;
+                z = radius * Math.sin(phi) * Math.sin(theta) + planet.position.z;
+            }
+            
+            positions[i * 3] = x;
+            positions[i * 3 + 1] = y;
+            positions[i * 3 + 2] = z;
+            
+            // Set color based on type
+            const color = p.type === 'metal' ? this.resourceColors.metal : this.resourceColors.slag;
+            // Add slight variation based on index
+            const variation = 0.12;
+            const varSeed = (i * 0.618) % 1;
+            colors[i * 3] = Math.max(0, Math.min(1, color.r + (varSeed - 0.5) * variation));
+            colors[i * 3 + 1] = Math.max(0, Math.min(1, color.g + (varSeed - 0.5) * variation));
+            colors[i * 3 + 2] = Math.max(0, Math.min(1, color.b + (varSeed - 0.5) * variation));
+        }
+        
+        particleSystem.geometry.attributes.position.needsUpdate = true;
+        particleSystem.geometry.attributes.color.needsUpdate = true;
+        particleSystem.geometry.setDrawRange(0, Math.min(allParticles.length, this.maxResourceParticles));
     }
 
     update(deltaTime) {
@@ -1936,6 +2456,22 @@ class SolarSystem {
                 comet.position.copy(newPosition);
             }
         });
+        
+        // Update resource particle positions (metal/slag orbiting planets)
+        this.updateResourceParticlePositions(deltaTime);
+    }
+    
+    /**
+     * Update resource particle positions each frame for smooth animation
+     * Called from update() to animate resource particles drifting and orbiting
+     * @param {number} deltaTime - Time delta in seconds
+     */
+    updateResourceParticlePositions(deltaTime) {
+        Object.keys(this.resourceParticles).forEach(zoneId => {
+            // Rebuild particle buffer updates positions based on current time
+            // This handles both orbital motion and drift animation
+            this.rebuildResourceParticleBuffer(zoneId);
+        });
     }
 
     /**
@@ -1991,6 +2527,10 @@ class SolarSystem {
         
         // Update belt/cloud visualizations based on mining
         this.updateBeltDepletion(gameState);
+        
+        // Update resource particles (metal and slag orbiting planets)
+        // Spawns new particles when resources increase, removes when consumed
+        this.updateResourceParticles(gameState);
 
         // Update visual appearance based on mass remaining
         Object.keys(this.planets).forEach(zoneId => {
@@ -2221,6 +2761,45 @@ class SolarSystem {
             this.oortCloud.geometry.setDrawRange(0, visibleParticles);
             this.oortCloud.visible = visibleParticles > 0;
         }
+    }
+    
+    /**
+     * Toggle visibility of orbital lines (planet orbits, comet orbits)
+     * @param {boolean} [visible] - Optional explicit visibility. If not provided, toggles current state.
+     * @returns {boolean} New visibility state
+     */
+    toggleOrbitalLines(visible) {
+        // Determine new visibility state
+        if (visible === undefined) {
+            // Toggle based on current state of first orbit
+            const firstOrbitId = Object.keys(this.orbits)[0];
+            visible = firstOrbitId ? !this.orbits[firstOrbitId].visible : true;
+        }
+        
+        // Toggle planet orbits
+        for (const orbitId in this.orbits) {
+            if (this.orbits[orbitId]) {
+                this.orbits[orbitId].visible = visible;
+            }
+        }
+        
+        // Toggle comet orbits
+        for (const cometIndex in this.cometOrbits) {
+            if (this.cometOrbits[cometIndex]) {
+                this.cometOrbits[cometIndex].visible = visible;
+            }
+        }
+        
+        return visible;
+    }
+    
+    /**
+     * Get current visibility state of orbital lines
+     * @returns {boolean} Current visibility state
+     */
+    getOrbitalLinesVisible() {
+        const firstOrbitId = Object.keys(this.orbits)[0];
+        return firstOrbitId ? this.orbits[firstOrbitId].visible : true;
     }
 }
 

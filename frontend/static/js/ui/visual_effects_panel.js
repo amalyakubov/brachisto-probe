@@ -13,13 +13,13 @@ class VisualEffectsPanel {
         // Initialize with current values from scene (will be updated on first render)
         this.effects = {
             bloom: {
-                enabled: true,
+                enabled: false,  // Disabled by default
                 strength: 1.2,
                 radius: 0.6,
                 threshold: 0.3
             },
             godRays: {
-                enabled: true,
+                enabled: false,  // Disabled by default
                 exposure: 0.18,
                 decay: 0.95,
                 density: 0.8,

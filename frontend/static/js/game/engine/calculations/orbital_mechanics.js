@@ -11,12 +11,21 @@ class OrbitalMechanics {
     constructor(dataLoader) {
         this.dataLoader = dataLoader;
         this.orbitalZones = null;
+        this.economicRules = null;
         
         // Standard gravitational parameter for Sun (m³/s²)
         this.SUN_MU = 1.32712440018e20;  // G * M_sun
         
         // Base specific impulse (seconds) - will be modified by propulsion skill
         this.BASE_ISP = 500;  // seconds
+    }
+    
+    /**
+     * Initialize with economic rules (for skill coefficients)
+     * @param {Object} economicRules - Economic rules from data loader
+     */
+    initializeEconomicRules(economicRules) {
+        this.economicRules = economicRules;
     }
     
     /**
@@ -38,13 +47,126 @@ class OrbitalMechanics {
     }
     
     /**
+     * Build skill values array from coefficients and skills
+     * @param {Object} coefficients - Skill coefficients { skillName: coefficient }
+     * @param {Object} skills - Current skills from research
+     * @returns {Array<number>} Array of (coefficient * skill) values
+     */
+    buildSkillValues(coefficients, skills) {
+        if (!coefficients) return [1.0];
+        
+        const values = [];
+        for (const [skillName, coefficient] of Object.entries(coefficients)) {
+            if (skillName === 'description') continue; // Skip description field
+            
+            // Map skill names to actual skill values
+            let skillValue = 1.0;
+            switch (skillName) {
+                case 'robotic':
+                    skillValue = skills.robotic || skills.manipulation || 1.0;
+                    break;
+                case 'computer':
+                    skillValue = skills.computer?.total || 1.0;
+                    break;
+                case 'solar_pv':
+                    skillValue = skills.solar_pv || skills.energy_collection || 1.0;
+                    break;
+                default:
+                    skillValue = skills[skillName] || 1.0;
+            }
+            
+            values.push(coefficient * skillValue);
+        }
+        
+        return values.length > 0 ? values : [1.0];
+    }
+    
+    /**
+     * Calculate tech tree upgrade factor using geometric mean
+     * Formula: F = G^alpha where G = (c1*s1 * c2*s2 * ... * cn*sn)^(1/n)
+     * @param {Array<number>} skillValues - Array of (skill * coefficient) values
+     * @param {number} alpha - Tech growth scale factor (default 0.75)
+     * @returns {number} Tech tree upgrade factor
+     */
+    calculateTechTreeUpgradeFactor(skillValues, alpha = 0.75) {
+        if (!skillValues || skillValues.length === 0) return 1.0;
+        
+        // Filter out zero/negative values (safety check)
+        const validValues = skillValues.filter(v => v > 0);
+        if (validValues.length === 0) return 1.0;
+        
+        // Calculate geometric mean: G = (v1 * v2 * ... * vn)^(1/n)
+        const product = validValues.reduce((prod, val) => prod * val, 1.0);
+        const geometricMean = Math.pow(product, 1.0 / validValues.length);
+        
+        // Calculate log(G)
+        const logG = Math.log(geometricMean);
+        
+        // F = exp(alpha * log(G)) = G^alpha
+        const factor = Math.exp(alpha * logG);
+        
+        return factor;
+    }
+    
+    /**
+     * Calculate delta-v reduction factor from skills
+     * @param {Object} skills - Current skills from research
+     * @returns {number} Delta-v reduction factor (multiplier, < 1.0 means reduced delta-v)
+     */
+    calculateDeltaVReductionFactor(skills) {
+        if (!this.economicRules || !this.economicRules.skill_coefficients) {
+            // Fallback: use propulsion skill directly
+            return 1.0 / (1 + (skills.propulsion || 1.0) - 1.0);
+        }
+        
+        const coefficients = this.economicRules.skill_coefficients.delta_v_reduction;
+        if (!coefficients) {
+            // Fallback: use propulsion skill directly
+            return 1.0 / (1 + (skills.propulsion || 1.0) - 1.0);
+        }
+        
+        const skillValues = this.buildSkillValues(coefficients, skills);
+        const alpha = this.economicRules.alpha_factors?.probe_performance || 0.75;
+        const upgradeFactor = this.calculateTechTreeUpgradeFactor(skillValues, alpha);
+        
+        // Delta-v reduction: higher upgrade factor = lower delta-v requirement
+        // Return inverse (1 / factor) so that factor > 1 means less delta-v needed
+        return 1.0 / upgradeFactor;
+    }
+    
+    /**
+     * Calculate transfer speed multiplier from skills
+     * @param {Object} skills - Current skills from research
+     * @returns {number} Transfer speed multiplier (> 1.0 means faster transfers)
+     */
+    calculateTransferSpeedFactor(skills) {
+        if (!this.economicRules || !this.economicRules.skill_coefficients) {
+            // Fallback: no speed boost
+            return 1.0;
+        }
+        
+        const coefficients = this.economicRules.skill_coefficients.transfer_speed;
+        if (!coefficients) {
+            // Fallback: no speed boost
+            return 1.0;
+        }
+        
+        const skillValues = this.buildSkillValues(coefficients, skills);
+        const alpha = this.economicRules.alpha_factors?.probe_performance || 0.75;
+        const upgradeFactor = this.calculateTechTreeUpgradeFactor(skillValues, alpha);
+        
+        // Transfer speed: higher upgrade factor = faster transfers
+        return upgradeFactor;
+    }
+    
+    /**
      * Calculate delta-v for Hohmann transfer between two zones
      * @param {string} fromZoneId - Source zone
      * @param {string} toZoneId - Destination zone
-     * @param {number} propulsionSkill - Propulsion skill multiplier
+     * @param {Object|number} skillsOrPropulsionSkill - Skills object or propulsion skill multiplier (for backward compatibility)
      * @returns {number} Delta-v in m/s
      */
-    calculateDeltaV(fromZoneId, toZoneId, propulsionSkill = 1.0) {
+    calculateDeltaV(fromZoneId, toZoneId, skillsOrPropulsionSkill = 1.0) {
         const fromZone = this.getZone(fromZoneId);
         const toZone = this.getZone(toZoneId);
         
@@ -81,51 +203,80 @@ class OrbitalMechanics {
         
         const totalDeltaV = Math.abs(dv1) + Math.abs(dv2);
         
-        // Apply propulsion skill (higher skill = lower delta-v requirement)
-        // Skill acts as efficiency multiplier: effective_dv = dv / (1 + skill_bonus)
-        // e.g., skill = 1.5 means 1.5x efficiency, so dv is reduced
-        const effectiveDeltaV = totalDeltaV / (1 + (propulsionSkill - 1.0));
+        // Apply skill-based delta-v reduction
+        let reductionFactor = 1.0;
+        if (typeof skillsOrPropulsionSkill === 'object' && skillsOrPropulsionSkill !== null) {
+            // New system: use skill coefficients from config
+            reductionFactor = this.calculateDeltaVReductionFactor(skillsOrPropulsionSkill);
+        } else {
+            // Legacy system: use propulsion skill directly
+            const propulsionSkill = skillsOrPropulsionSkill || 1.0;
+            reductionFactor = 1.0 / (1 + (propulsionSkill - 1.0));
+        }
+        
+        const effectiveDeltaV = totalDeltaV * reductionFactor;
         
         return effectiveDeltaV;
     }
     
     /**
-     * Calculate transfer time for Hohmann transfer
+     * Calculate transfer time based on Hohmann ellipse arc length
+     * Uses constant cargo speed along the elliptical path
+     * Calibrated so Earth (1 AU) to Mars (1.52 AU) takes ~8 months
      * @param {string} fromZoneId - Source zone
      * @param {string} toZoneId - Destination zone
-     * @param {number} propulsionSkill - Propulsion skill multiplier
+     * @param {Object|number} skillsOrPropulsionSkill - Skills object or propulsion skill multiplier (for backward compatibility)
      * @returns {number} Transfer time in days
      */
-    calculateTransferTime(fromZoneId, toZoneId, propulsionSkill = 1.0) {
+    calculateTransferTime(fromZoneId, toZoneId, skillsOrPropulsionSkill = 1.0) {
         const fromZone = this.getZone(fromZoneId);
         const toZone = this.getZone(toZoneId);
         
         if (!fromZone || !toZone) return Infinity;
         
-        // Get orbital radii in meters
-        const r1 = fromZone.radius_km * 1000;
-        const r2 = toZone.radius_km * 1000;
+        // Get orbital radii in AU (convert from km if needed)
+        const AU_KM = 149597870.7;
+        const r1_au = fromZone.radius_au || (fromZone.radius_km / AU_KM);
+        const r2_au = toZone.radius_au || (toZone.radius_km / AU_KM);
         
-        if (r1 === r2) return 0;
+        if (r1_au === r2_au) return 0;
         
-        const rInner = Math.min(r1, r2);
-        const rOuter = Math.max(r1, r2);
-        
-        // Hohmann transfer time = half the orbital period of transfer ellipse
-        // T = π * sqrt((a^3) / μ)
-        // where a = semi-major axis = (r1 + r2) / 2
+        // Calculate Hohmann transfer ellipse parameters
+        const rInner = Math.min(r1_au, r2_au);
+        const rOuter = Math.max(r1_au, r2_au);
         const semiMajorAxis = (rInner + rOuter) / 2;
-        const transferTimeSeconds = Math.PI * Math.sqrt(Math.pow(semiMajorAxis, 3) / this.SUN_MU);
+        const eccentricity = (rOuter - rInner) / (rOuter + rInner);
+        const semiMinorAxis = semiMajorAxis * Math.sqrt(1 - eccentricity * eccentricity);
         
-        // Convert seconds to days
-        const transferTimeDays = transferTimeSeconds / 86400;
+        // Calculate arc length of half-ellipse using Ramanujan's approximation
+        // Full ellipse circumference ≈ π * (3(a+b) - sqrt((3a+b)(a+3b)))
+        const a = semiMajorAxis;
+        const b = semiMinorAxis;
+        const h = Math.pow((a - b) / (a + b), 2);
+        const fullCircumference = Math.PI * (a + b) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
+        const arcLength = fullCircumference / 2; // Half-orbit for Hohmann transfer
         
-        // Apply propulsion skill (higher skill = faster transfer)
-        // Skill improves specific impulse, which affects acceleration
-        // Simplified: effective_time = time / (1 + skill_bonus * 0.5)
-        const effectiveTime = transferTimeDays / (1 + (propulsionSkill - 1.0) * 0.5);
+        // Base cargo speed: calibrated so Earth→Mars takes 8 months (243 days)
+        // Earth-Mars arc length: a=1.26 AU, e=0.206, b≈1.23 AU, arc≈3.9 AU
+        // Speed = 3.9 AU / 243 days ≈ 0.016 AU/day
+        const EARTH_MARS_ARC = 3.9; // AU (approximate)
+        const EARTH_MARS_TIME = 243; // days (8 months)
+        const BASE_SPEED_AU_PER_DAY = EARTH_MARS_ARC / EARTH_MARS_TIME;
         
-        return effectiveTime;
+        const baseTimeDays = arcLength / BASE_SPEED_AU_PER_DAY;
+        
+        // Apply skill-based transfer speed multiplier
+        let speedFactor = 1.0;
+        if (typeof skillsOrPropulsionSkill === 'object' && skillsOrPropulsionSkill !== null) {
+            // New system: use skill coefficients from config
+            speedFactor = this.calculateTransferSpeedFactor(skillsOrPropulsionSkill);
+        }
+        // Legacy: if propulsionSkill is a number, it's currently unused (reserved for future)
+        
+        // Higher speed factor = faster transfers = less time
+        const effectiveTimeDays = baseTimeDays / speedFactor;
+        
+        return effectiveTimeDays;
     }
     
     /**

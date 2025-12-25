@@ -57,6 +57,76 @@ class TransferPanel {
         return num.toLocaleString('en-US');
     }
 
+    formatMass(kg) {
+        if (kg >= 1e15) {
+            return (kg / 1e15).toFixed(2) + ' PT';
+        } else if (kg >= 1e12) {
+            return (kg / 1e12).toFixed(2) + ' GT';
+        } else if (kg >= 1e9) {
+            return (kg / 1e9).toFixed(2) + ' MT';
+        } else if (kg >= 1e6) {
+            return (kg / 1e6).toFixed(2) + ' kT';
+        } else if (kg >= 1e3) {
+            return (kg / 1e3).toFixed(2) + ' T';
+        } else {
+            return kg.toFixed(0) + ' kg';
+        }
+    }
+
+    calculateTransferProgress(transfer) {
+        // Calculate progress based on departure_time, arrival_time, and current game time
+        if (!this.gameState) return 0;
+        
+        const currentTime = this.gameState.time || 0; // Game time in days
+        const departureTime = transfer.departure_time || 0; // In days
+        const arrivalTime = transfer.arrival_time || currentTime; // In days
+        
+        if (arrivalTime <= departureTime) return 1; // Completed or invalid
+        if (currentTime <= departureTime) return 0; // Not started
+        if (currentTime >= arrivalTime) return 1; // Completed
+        
+        const elapsed = currentTime - departureTime;
+        const total = arrivalTime - departureTime;
+        
+        return Math.max(0, Math.min(1, elapsed / total));
+    }
+
+    calculateMassThroughput(transfer) {
+        // Calculate actual mass throughput for continuous transfers
+        if (!this.gameState || transfer.type !== 'continuous') return null;
+        
+        const fromZoneId = transfer.from;
+        const resourceType = transfer.resource_type || 'probe';
+        
+        if (resourceType === 'metal') {
+            // Get stored metal in source zone
+            const zones = this.gameState.zones || {};
+            const sourceZone = zones[fromZoneId] || {};
+            const storedMetal = sourceZone.stored_metal || 0;
+            
+            // Calculate rate from percentage
+            const ratePercentage = transfer.metal_rate_percentage || transfer.rate || 0;
+            const actualRateKgPerDay = storedMetal * (ratePercentage / 100);
+            
+            // Get mass driver capacity if available
+            let totalCapacity = 0;
+            let usedCapacity = 0;
+            if (window.gameEngine && window.gameEngine.transferSystem) {
+                totalCapacity = window.gameEngine.transferSystem.calculateMetalTransferCapacity(this.gameState, fromZoneId);
+                usedCapacity = window.gameEngine.transferSystem.calculateUsedMetalCapacity(this.gameState, fromZoneId);
+            }
+            
+            return {
+                actualRate: actualRateKgPerDay,
+                totalCapacity: totalCapacity,
+                usedCapacity: usedCapacity,
+                availableCapacity: Math.max(0, totalCapacity - usedCapacity)
+            };
+        }
+        
+        return null;
+    }
+
     render() {
         if (!this.container) return;
 
@@ -113,7 +183,13 @@ class TransferPanel {
                 html += `<div class="transfer-detail">Count: ${this.formatNumber(transfer.count || 0)} probes</div>`;
             }
             if (transfer.status === 'in-progress') {
-                html += `<div class="transfer-detail">Status: Transferring...</div>`;
+                // Calculate and display progress bar
+                const progress = this.calculateTransferProgress(transfer);
+                const progressPct = Math.min(100, Math.max(0, progress * 100));
+                html += `<div class="transfer-progress-container">`;
+                html += `<div class="transfer-progress-bar" style="width: ${progressPct.toFixed(1)}%"></div>`;
+                html += `<span class="transfer-progress-text">${progressPct.toFixed(1)}%</span>`;
+                html += `</div>`;
             } else if (transfer.status === 'completed') {
                 const duration = transfer.completedTime ? 
                     ((transfer.completedTime - transfer.startTime) / 1000).toFixed(1) : '?';
@@ -124,12 +200,22 @@ class TransferPanel {
             // Continuous transfer
             html += `<div class="transfer-item-details">`;
             if (resourceType === 'metal') {
-                const rateKgPerDay = transfer.metal_rate_kg_per_day || transfer.rate || 0;
-                html += `<div class="transfer-detail">Rate: ${this.formatNumber(rateKgPerDay)} kg/day</div>`;
+                const ratePercentage = transfer.metal_rate_percentage || transfer.rate || 0;
+                const throughput = this.calculateMassThroughput(transfer);
+                
+                if (throughput && throughput.totalCapacity > 0) {
+                    // Show actual throughput and capacity usage
+                    html += `<div class="transfer-detail">Rate: ${ratePercentage.toFixed(1)}% of stored metal/day</div>`;
+                    html += `<div class="transfer-detail">Throughput: ${this.formatMass(throughput.actualRate)}/day</div>`;
+                    const capacityUsedPct = throughput.totalCapacity > 0 ? 
+                        (throughput.usedCapacity / throughput.totalCapacity * 100) : 0;
+                    html += `<div class="transfer-detail">Capacity: ${this.formatMass(throughput.usedCapacity)}/${this.formatMass(throughput.totalCapacity)}/day (${capacityUsedPct.toFixed(1)}%)</div>`;
+                } else {
+                    html += `<div class="transfer-detail">Rate: ${ratePercentage.toFixed(1)}% of stored metal/day</div>`;
+                }
             } else {
-                const ratePerDay = transfer.rate || 0;
                 const ratePct = transfer.ratePercentage !== undefined ? transfer.ratePercentage : (transfer.rate || 0);
-                html += `<div class="transfer-detail">Rate: ${ratePerDay.toFixed(2)} probes/day (${ratePct.toFixed(1)}% of production)</div>`;
+                html += `<div class="transfer-detail">Rate: ${ratePct.toFixed(1)}% of probe production</div>`;
             }
             html += `</div>`;
             
@@ -250,11 +336,7 @@ class TransferPanel {
         const transfer = this.transferHistory.find(t => t.id == transferId);
         if (!transfer) return;
         
-        if (!confirm('Are you sure you want to delete this transfer?')) {
-            return;
-        }
-        
-        // Remove from history
+        // Remove from history (no confirmation needed)
         const index = this.transferHistory.indexOf(transfer);
         if (index > -1) {
             this.transferHistory.splice(index, 1);
@@ -286,7 +368,7 @@ class TransferPanel {
             hash = ((hash << 5) - hash) + idHash;
             hash = ((hash << 5) - hash) + (transfer.probe_count || 0);
             hash = ((hash << 5) - hash) + (transfer.rate_percentage || 0);
-            hash = ((hash << 5) - hash) + (transfer.metal_rate_kg_per_day || 0);
+            hash = ((hash << 5) - hash) + (transfer.metal_rate_percentage || 0);
             hash = ((hash << 5) - hash) + (transfer.status === 'completed' ? 1 : 0);
             hash = ((hash << 5) - hash) + (transfer.paused ? 1 : 0);
             hash = ((hash << 5) - hash) + (transfer.resource_type === 'metal' ? 2 : 1);
@@ -313,9 +395,12 @@ class TransferPanel {
                 existing.resource_type = activeTransfer.resource_type || existing.resource_type || 'probe';
                 existing.count = activeTransfer.probe_count !== undefined ? activeTransfer.probe_count : existing.count;
                 existing.metal_kg = activeTransfer.metal_kg !== undefined ? activeTransfer.metal_kg : existing.metal_kg;
-                existing.rate = activeTransfer.rate_percentage || activeTransfer.metal_rate_kg_per_day || existing.rate || 0;
+                existing.rate = activeTransfer.rate_percentage || activeTransfer.metal_rate_percentage || existing.rate || 0;
                 existing.ratePercentage = activeTransfer.rate_percentage !== undefined ? activeTransfer.rate_percentage : existing.ratePercentage;
-                existing.metal_rate_kg_per_day = activeTransfer.metal_rate_kg_per_day !== undefined ? activeTransfer.metal_rate_kg_per_day : existing.metal_rate_kg_per_day;
+                existing.metal_rate_percentage = activeTransfer.metal_rate_percentage !== undefined ? activeTransfer.metal_rate_percentage : existing.metal_rate_percentage;
+                // Store departure and arrival times for progress calculation
+                existing.departure_time = activeTransfer.departure_time !== undefined ? activeTransfer.departure_time : existing.departure_time;
+                existing.arrival_time = activeTransfer.arrival_time !== undefined ? activeTransfer.arrival_time : existing.arrival_time;
                 if (activeTransfer.type === 'one-time') {
                     existing.status = activeTransfer.status === 'completed' ? 'completed' : 
                                      activeTransfer.status === 'paused' ? 'paused' : 'in-progress';
@@ -332,9 +417,11 @@ class TransferPanel {
                     resource_type: activeTransfer.resource_type || 'probe',
                     count: activeTransfer.probe_count || 0,
                     metal_kg: activeTransfer.metal_kg || 0,
-                    rate: activeTransfer.rate_percentage || activeTransfer.metal_rate_kg_per_day || 0,
+                    rate: activeTransfer.rate_percentage || activeTransfer.metal_rate_percentage || 0,
                     ratePercentage: activeTransfer.rate_percentage,
-                    metal_rate_kg_per_day: activeTransfer.metal_rate_kg_per_day,
+                    metal_rate_percentage: activeTransfer.metal_rate_percentage,
+                    departure_time: activeTransfer.departure_time || 0,
+                    arrival_time: activeTransfer.arrival_time || 0,
                     status: activeTransfer.type === 'one-time' ? 
                            (activeTransfer.status === 'completed' ? 'completed' : 
                             activeTransfer.status === 'paused' ? 'paused' : 'in-progress') :
@@ -347,21 +434,11 @@ class TransferPanel {
             }
         });
         
-        // Remove transfers that are no longer in active_transfers (unless they're still active)
-        // Use strict comparison to ensure IDs match correctly
+        // Remove transfers that are no longer in active_transfers
+        // Completed transfers are automatically removed from active_transfers by the engine
         this.transferHistory = this.transferHistory.filter(transfer => {
-            // Keep if transfer ID is in active transfers list
-            if (activeTransferIds.includes(transfer.id)) {
-                return true;
-            }
-            // Remove completed one-time transfers that aren't in active list
-            if (transfer.type === 'one-time' && transfer.status === 'completed') {
-                return false;
-            }
-            // Keep active/paused/in-progress transfers (they might be transitioning)
-            return transfer.status === 'active' || 
-                   transfer.status === 'in-progress' || 
-                   transfer.status === 'paused';
+            // Only keep transfers that are still in the active transfers list
+            return activeTransferIds.includes(transfer.id);
         });
         
         this.render();
