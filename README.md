@@ -32,10 +32,26 @@ A minimum-time simulation game for constructing Dyson spheres. Build probes, res
 
 ### Installation
 
+#### Recommended (uv install)
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/brachisto-probe.git
-cd brachisto-probe
+git clone https://github.com/anderote/brachisto-probe.git
+
+# Create environment and install dependencies in one step
+uv sync
+
+# Run the game
+uv run run.py
+
+```
+
+
+#### Standard pip install
+
+```bash
+# Clone the repository
+git clone https://github.com/anderote/brachisto-probe.git
 
 # Create virtual environment (optional but recommended)
 python3 -m venv venv
