@@ -2,7 +2,9 @@
 
 A minimum-time simulation game for constructing Dyson spheres. Build probes, research technologies, construct structures, and expand across the solar system to harness stellar energy.
 
-![Game Screenshot](docs/screenshot.png)
+<img width="2930" height="1668" alt="image" src="https://github.com/user-attachments/assets/57c7c7d7-d8c1-4f1f-a470-284d8602c26d" />
+<img width="3144" height="1870" alt="image" src="https://github.com/user-attachments/assets/049aca60-05b9-4c43-a0b3-1590eef00d0e" />
+
 
 ---
 
